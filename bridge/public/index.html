@@ -2,14 +2,13 @@
 <html lang="en" data-theme="light">
 <head>
   <meta charset="UTF-8" />
+  <meta name="orca-swarm-token" content="" />
+  <meta name="referrer" content="no-referrer" />
   <title>Swarm · Orca ADE</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Google+Sans+Code:wght@400;500;600&family=Google+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <style>
     :root {
-      --sans: "Google Sans", -apple-system, BlinkMacSystemFont, sans-serif;
-      --mono: "Google Sans Code", ui-monospace, SFMono-Regular, Menlo, monospace;
+      --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
       --tl-label-w: 174px;
     }
     html[data-theme="light"] {
@@ -1090,6 +1089,16 @@ let uiMode = localStorage.getItem(UI_MODE_STORAGE_KEY) === 'dev' ? 'dev' : 'simp
 function isSimpleUi() { return uiMode === 'simple'; }
 function tUi(simpleStr, devStr) { return uiMode === 'simple' ? simpleStr : devStr; }
 
+function getBridgeToken() {
+  return document.querySelector('meta[name="orca-swarm-token"]')?.getAttribute('content') || '';
+}
+function bridgeJsonHeaders() {
+  const token = getBridgeToken();
+  return token
+    ? { 'Content-Type': 'application/json', 'X-Orca-Swarm-Token': token }
+    : { 'Content-Type': 'application/json' };
+}
+
 function formatStateLabel(state) {
   const s = String(state || 'waiting').toLowerCase();
   if (!isSimpleUi()) return s;
@@ -1853,7 +1862,7 @@ function registerMember(cfg, brief, broadcast = true) {
     persistCustomAgent(cfg, brief);
     fetch('/api/members', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: bridgeJsonHeaders(),
       body: JSON.stringify({ member: cfg, initialBrief: brief })
     }).catch(err => console.warn('Could not POST /api/members:', err));
   }
@@ -1938,7 +1947,7 @@ function addPost(from, text, broadcast = true) {
   if (broadcast) {
     fetch('/events', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: bridgeJsonHeaders(),
       body: JSON.stringify({
         type: 'post',
         from: post.from,
@@ -2333,7 +2342,7 @@ function wireComposer(inputElId, senderElId, btnElId, toggleElId, menuElId) {
     try {
       const res = await fetch('/api/dispatch-mentions', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: bridgeJsonHeaders(),
         body: JSON.stringify({
           from: sender,
           text: val,
@@ -3290,7 +3299,7 @@ document.getElementById('createCustomBtn').onclick = () => {
   if (document.getElementById('caSavePreset')?.checked) {
     fetch('/api/presets', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: bridgeJsonHeaders(),
       body: JSON.stringify({ preset: { ...cfg, brief } })
     }).then(() => loadAgentPresets()).catch(err => console.warn('Could not POST /api/presets:', err));
   }
@@ -3305,6 +3314,7 @@ loadAgentPresets();
 loadAvailableModels(false);
 
 window.addEventListener('message', (event) => {
+  if (event.origin && event.origin !== window.location.origin) return;
   const msg = event.data;
   if (msg?.type === 'swarm:theme' && (msg.theme === 'light' || msg.theme === 'dark')) {
     document.documentElement.dataset.theme = msg.theme;
@@ -3336,7 +3346,7 @@ function saveSwarmTitle() {
   localStorage.setItem(SWARM_TITLE_STORAGE_KEY, val);
   fetch('/events', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: bridgeJsonHeaders(),
     body: JSON.stringify({ type: 'title', title: val })
   }).catch(() => {});
 }
@@ -3541,7 +3551,7 @@ async function openFileDiff(worktreePath, filePath, btnEl) {
   try {
     const res = await fetch('/api/files/open-diff', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: bridgeJsonHeaders(),
       body: JSON.stringify({ worktreePath, filePath })
     });
     const data = await res.json().catch(() => ({}));
@@ -4003,7 +4013,7 @@ document.getElementById('steerTerminalForm')?.addEventListener('submit', async (
   try {
     const res = await fetch('/api/terminal/send', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: bridgeJsonHeaders(),
       body: JSON.stringify({
         terminalHandle: target.terminalHandle,
         text,
@@ -4074,7 +4084,7 @@ document.getElementById('handoffForm')?.addEventListener('submit', async (e) => 
   try {
     const res = await fetch('/api/handoff', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: bridgeJsonHeaders(),
       body: JSON.stringify({
         mode,
         sourceWorktreeId: target.worktreeId || '',

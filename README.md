@@ -49,13 +49,15 @@ Open [http://127.0.0.1:4319](http://127.0.0.1:4319).
 
 ## Event webhook API
 
-Scripts, CLI hooks, or agent runners can push posts and tool activity straight to the canvas.
+Scripts, CLI hooks, or agent runners can append lines directly to `~/.orca-swarm/events.jsonl` or post over `127.0.0.1` using the session token in `~/.orca-swarm/bridge.token`.
 
 ### Post a board update
 
 ```bash
+TOKEN=$(cat ~/.orca-swarm/bridge.token)
 curl -X POST http://127.0.0.1:4319/events \
   -H "Content-Type: application/json" \
+  -H "X-Orca-Swarm-Token: $TOKEN" \
   -d '{
     "type": "swarm:post",
     "from": "@coder",
@@ -67,8 +69,10 @@ curl -X POST http://127.0.0.1:4319/events \
 ### Log a tool event
 
 ```bash
+TOKEN=$(cat ~/.orca-swarm/bridge.token)
 curl -X POST http://127.0.0.1:4319/events \
   -H "Content-Type: application/json" \
+  -H "X-Orca-Swarm-Token: $TOKEN" \
   -d '{
     "type": "swarm:activity",
     "activity": {
@@ -82,6 +86,13 @@ curl -X POST http://127.0.0.1:4319/events \
   }'
 ```
 
+## Security model
+
+- **Loopback binding**: Listens on `127.0.0.1` only by default (`ORCA_SWARM_HOST=127.0.0.1`), blocking LAN access.
+- **DNS rebinding and CORS checks**: Rejects foreign `Host`, `Origin`, and cross-site browser requests with no wildcard CORS.
+- **Per-run token and redaction**: Requires a `0600` `X-Orca-Swarm-Token` on all `POST` endpoints, scrubs common API keys and credentials from hook and event logs, and runs zero external fonts or telemetry.
+- **Threat model and disclosure**: Read [SECURITY.md](./SECURITY.md) for security controls and vulnerability reporting.
+
 ## Project structure
 
 - `orca-plugin.json`: Orca v2 plugin manifest (`trusted-worker`).
@@ -90,6 +101,7 @@ curl -X POST http://127.0.0.1:4319/events \
 - `bridge/server.mjs`: Zero-dependency HTTP/SSE bridge, Orca poller, and CLI discovery server.
 - `bridge/public/index.html`: Single-file canvas UI with Simple/Dev language modes and demo mode.
 - `hooks/swarm-hook.mjs`: CLI tool hook for external agent logging.
+- `SECURITY.md`: Security architecture, user safeguards, and vulnerability disclosure policy.
 
 ## Author and licence
 

@@ -1,4 +1,5 @@
 import http from 'http';
+import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import url from 'url';
@@ -9,25 +10,49 @@ const __filename = url.fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // Configuration
-export const PORT = parseInt(process.env.ORCA_SWARM_PORT || '4319', 10);
-export const HOST = process.env.ORCA_SWARM_HOST || '0.0.0.0';
+const rawPort = parseInt(process.env.ORCA_SWARM_PORT || '4319', 10);
+export const PORT = Number.isInteger(rawPort) && rawPort >= 1 && rawPort <= 65535 ? rawPort : 4319;
+export const HOST = process.env.ORCA_SWARM_HOST || '127.0.0.1';
 export const PUBLIC_DIR = path.resolve(__dirname, 'public');
+export const PUBLIC_REAL_DIR = fs.existsSync(PUBLIC_DIR) ? fs.realpathSync(PUBLIC_DIR) : PUBLIC_DIR;
 export const ORCA_SWARM_DIR = path.join(os.homedir(), '.orca-swarm');
 export const EVENTS_FILE = path.join(ORCA_SWARM_DIR, 'events.jsonl');
 export const PRESETS_FILE = path.join(ORCA_SWARM_DIR, 'presets.json');
+export const TOKEN_FILE = path.join(ORCA_SWARM_DIR, 'bridge.token');
+export const BRIDGE_TOKEN = (process.env.ORCA_SWARM_TOKEN && process.env.ORCA_SWARM_TOKEN.trim())
+  || crypto.randomBytes(32).toString('hex');
 let activePort = PORT;
 
-// Ensure ~/.orca-swarm exists
-try {
-  if (!fs.existsSync(ORCA_SWARM_DIR)) {
-    fs.mkdirSync(ORCA_SWARM_DIR, { recursive: true });
+const MAX_POSTS = 500;
+const MAX_ACTIVITIES = 500;
+const MAX_MEMBERS = 200;
+const MAX_SSE_CLIENTS = 64;
+
+function ensureSwarmStorage({ writeToken = false } = {}) {
+  try {
+    if (!fs.existsSync(ORCA_SWARM_DIR)) {
+      fs.mkdirSync(ORCA_SWARM_DIR, { recursive: true, mode: 0o700 });
+    }
+    try { fs.chmodSync(ORCA_SWARM_DIR, 0o700); } catch {}
+    if (!fs.existsSync(EVENTS_FILE)) {
+      fs.writeFileSync(EVENTS_FILE, '', { encoding: 'utf8', mode: 0o600 });
+    } else {
+      try { fs.chmodSync(EVENTS_FILE, 0o600); } catch {}
+    }
+    if (fs.existsSync(PRESETS_FILE)) {
+      try { fs.chmodSync(PRESETS_FILE, 0o600); } catch {}
+    }
+    if (writeToken) {
+      fs.writeFileSync(TOKEN_FILE, BRIDGE_TOKEN + '\n', { encoding: 'utf8', mode: 0o600 });
+      try { fs.chmodSync(TOKEN_FILE, 0o600); } catch {}
+    }
+  } catch (err) {
+    console.warn('[swarm-server] Warning preparing ~/.orca-swarm directory:', err.message);
   }
-  if (!fs.existsSync(EVENTS_FILE)) {
-    fs.writeFileSync(EVENTS_FILE, '', 'utf8');
-  }
-} catch (err) {
-  console.warn('[swarm-server] Warning creating ~/.orca-swarm directory:', err.message);
 }
+
+// Ensure ~/.orca-swarm exists with strict user-only permissions
+ensureSwarmStorage({ writeToken: false });
 
 // Universal Agent Type Detection
 export function detectAgentType(input) {
@@ -90,8 +115,8 @@ function normalisePresetRecord(raw, defaults = {}) {
   const model = stripQuotes(raw.model || defaults.model || '');
   const detected = detectAgentType(`${model} ${defaults.providerHint || ''} ${id} ${raw.role || ''} ${raw.description || ''}`);
   const meta = AGENT_TYPE_META[detected] || AGENT_TYPE_META.terminal;
-  const desc = stripQuotes(raw.description || raw.scope || '');
-  const role = stripQuotes(raw.role || '') || (raw.name ? stripQuotes(raw.name) : '') || meta.role;
+  const desc = redactSensitiveText(stripQuotes(raw.description || raw.scope || ''));
+  const role = redactSensitiveText(stripQuotes(raw.role || '') || (raw.name ? stripQuotes(raw.name) : '') || meta.role);
   const rawTags = Array.isArray(raw.tags)
     ? raw.tags
     : (typeof raw.tags === 'string' ? raw.tags.split(',').map(s => s.trim()).filter(Boolean) : (defaults.tags || []));
@@ -100,14 +125,14 @@ function normalisePresetRecord(raw, defaults = {}) {
   return {
     key: raw.key || `${defaults.category || 'saved'}:${defaults.source || 'local'}:${id.slice(1)}`,
     id,
-    name: stripQuotes(raw.name || id.slice(1)),
+    name: redactSensitiveText(stripQuotes(raw.name || id.slice(1))),
     role,
     model: model || meta.model,
     avatarBg: /^#[0-9a-fA-F]{6}$/.test(raw.avatarBg || raw.color || '') ? (raw.avatarBg || raw.color) : meta.avatarBg,
     icon: stripQuotes(raw.icon || '') || meta.icon,
     scope: desc || meta.scope,
     tags,
-    brief: stripQuotes(raw.brief || raw.initialBrief || '') || (desc ? `${desc}` : ''),
+    brief: redactSensitiveText(stripQuotes(raw.brief || raw.initialBrief || '') || (desc ? `${desc}` : '')),
     source: raw.source || defaults.source || 'Saved Preset',
     category: raw.category || defaults.category || 'saved'
   };
@@ -203,10 +228,9 @@ function saveUserPreset(rawPreset) {
   const preset = normalisePresetRecord(rawPreset, { category: 'saved', source: 'Saved (~/.orca-swarm/presets.json)' });
   const existing = loadSavedPresets().filter(p => p.id !== preset.id);
   const next = [preset, ...existing];
-  if (!fs.existsSync(ORCA_SWARM_DIR)) {
-    fs.mkdirSync(ORCA_SWARM_DIR, { recursive: true });
-  }
-  fs.writeFileSync(PRESETS_FILE, JSON.stringify({ presets: next }, null, 2) + '\n', 'utf8');
+  ensureSwarmStorage({ writeToken: false });
+  fs.writeFileSync(PRESETS_FILE, JSON.stringify({ presets: next }, null, 2) + '\n', { encoding: 'utf8', mode: 0o600 });
+  try { fs.chmodSync(PRESETS_FILE, 0o600); } catch {}
   return preset;
 }
 
@@ -278,12 +302,49 @@ let cachedModelDiscovery = null;
 let cachedModelDiscoveryAt = 0;
 let inFlightModelDiscovery = null;
 
-function sanitizeNonPiiText(str) {
+function redactSensitiveText(str) {
   if (!str || typeof str !== 'string') return '';
   return str
-    .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, '[redacted]')
-    .replace(/\b(?:sk|tok|bearer|ghp|gho|xoxb|xoxp)[-_A-Za-z0-9]{10,}\b/gi, '[redacted]')
+    .replace(/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g, '[redacted-private-key]')
+    .replace(/(https?:\/\/)([^:@\s/]+):([^@\s/]+)@/gi, '$1[redacted]@')
+    .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, '[redacted-email]')
+    .replace(/((?:Authorization\s*:\s*Bearer|Bearer)\s+)[A-Za-z0-9._~+/-]{12,}/gi, '$1[redacted]')
+    .replace(/\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g, '[redacted-jwt]')
+    .replace(/\b(?:sk-ant-[A-Za-z0-9_-]{12,}|sk-or-[A-Za-z0-9_-]{12,}|sk-[A-Za-z0-9_-]{16,}|github_pat_[A-Za-z0-9_]{20,}|(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{16,}|glpat-[A-Za-z0-9_-]{16,}|xox[abprs]-[A-Za-z0-9-]{10,}|AIza[0-9A-Za-z_-]{20,}|(?:AKIA|ASIA)[0-9A-Z]{16}|(?:xai-|hf_|gsk_|npm_)[A-Za-z0-9_-]{12,})\b/g, '[redacted-token]')
+    .replace(/((?:api[_-]?key|secret|token|password|passwd|private[_-]?key)\s*[:=]\s*["']?)([^\s"',;]{8,})(["']?)/gi, '$1[redacted]$3')
     .trim();
+}
+
+function sanitizeNonPiiText(str) {
+  return redactSensitiveText(str);
+}
+
+const UNSAFE_OBJECT_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+
+function stripUnsafeKeys(val, depth = 0) {
+  if (depth > 8 || val === null || typeof val !== 'object') return val;
+  if (Array.isArray(val)) return val.map(v => stripUnsafeKeys(v, depth + 1));
+  const out = {};
+  for (const [k, v] of Object.entries(val)) {
+    if (UNSAFE_OBJECT_KEYS.has(k)) continue;
+    out[k] = stripUnsafeKeys(v, depth + 1);
+  }
+  return out;
+}
+
+function redactEventPayload(val, depth = 0) {
+  if (depth > 6 || val === null || val === undefined) return val;
+  if (typeof val === 'string') return redactSensitiveText(val);
+  if (Array.isArray(val)) return val.slice(0, 100).map(v => redactEventPayload(v, depth + 1));
+  if (typeof val === 'object') {
+    const out = {};
+    for (const [k, v] of Object.entries(val)) {
+      if (UNSAFE_OBJECT_KEYS.has(k)) continue;
+      out[k] = redactEventPayload(v, depth + 1);
+    }
+    return out;
+  }
+  return val;
 }
 
 function computeLeftPct(bucket) {
@@ -382,6 +443,40 @@ async function fetchProviderQuotas() {
         }))
       : [];
     providers.antigravity = { ...agSummary, buckets: agBuckets };
+
+    // Orca reports Gemini CLI OAuth as "disabled in settings" when users run Gemini via Antigravity or API key.
+    if (providers.gemini.status !== 'ok' && !providers.gemini.rateLimited) {
+      const geminiBuckets = agBuckets.filter(b => /gemini/i.test(`${b.group} ${b.name}`));
+      const fiveHourBucket = geminiBuckets.find(b => /(five hour|5\s*h|session)/i.test(b.name));
+      const weeklyBucket = geminiBuckets.find(b => /weekly/i.test(b.name));
+      if (agSummary.status === 'ok' && geminiBuckets.length > 0) {
+        const sessionLeftPct = fiveHourBucket?.leftPct ?? null;
+        const weeklyLeftPct = weeklyBucket?.leftPct ?? null;
+        const isLimited = sessionLeftPct === 0 || weeklyLeftPct === 0;
+        const nextGemini = {
+          status: 'ok',
+          rateLimited: isLimited,
+          sessionLeftPct,
+          weeklyLeftPct,
+          error: null
+        };
+        nextGemini.quotaText = formatQuotaText(nextGemini);
+        providers.gemini = nextGemini;
+      } else if (/oauth is disabled in settings/i.test(providers.gemini.error || '')) {
+        const geminiSettings = readJsonFileSafe(path.join(os.homedir(), '.gemini', 'settings.json'));
+        const hasLocalGemini = Boolean(geminiSettings || process.env.GEMINI_API_KEY);
+        if (hasLocalGemini) {
+          providers.gemini = {
+            status: 'ok',
+            rateLimited: false,
+            sessionLeftPct: null,
+            weeklyLeftPct: null,
+            error: null,
+            quotaText: 'Ready (OAuth tracker off)'
+          };
+        }
+      }
+    }
   } catch {
     // Fail-safe: leave defaults
   }
@@ -631,7 +726,7 @@ function collectKnownBranchNames() {
 function isRealModelId(modelStr, knownBranches = new Set()) {
   if (!modelStr || typeof modelStr !== 'string') return false;
   const clean = modelStr.trim();
-  if (!clean || !/^[a-z0-9._:/-]+$/i.test(clean)) return false;
+  if (!clean || !/^[a-z0-9][a-z0-9._:/-]*$/i.test(clean)) return false;
   const lower = clean.toLowerCase();
   if (GENERIC_MODEL_TOKENS.has(lower)) return false;
   if (knownBranches.has(lower)) return false;
@@ -832,10 +927,10 @@ function extractMentions(text) {
 }
 
 function registerOrUpdateMember(m) {
-  if (!m) return null;
-  const rawId = (m.id || m.handle || '').trim();
+  if (!m || typeof m !== 'object') return null;
+  const rawId = String(m.id || m.handle || '').trim();
   if (!rawId) return null;
-  const id = rawId.startsWith('@') ? rawId : `@${rawId}`;
+  const id = normalizeHandle(rawId);
   const existingIdx = members.findIndex(mem => mem.id === id);
 
   const detected = detectAgentType(m.model || m.role || id);
@@ -843,19 +938,23 @@ function registerOrUpdateMember(m) {
 
   const memberObj = {
     id,
-    role: m.role || meta.role,
-    model: m.model || meta.model,
-    avatarBg: m.avatarBg || m.color || meta.avatarBg,
-    icon: m.icon || meta.icon,
-    scope: m.scope || m.duty || meta.scope,
-    tags: Array.isArray(m.tags) ? m.tags : (typeof m.tags === 'string' ? m.tags.split(',').map(s => s.trim()).filter(Boolean) : []),
-    joinedAtPost: m.joinedAtPost ?? posts.length,
+    role: redactSensitiveText(String(m.role || meta.role)).slice(0, 120) || meta.role,
+    model: String(m.model || meta.model).trim().slice(0, 120) || meta.model,
+    avatarBg: /^#[0-9a-fA-F]{6}$/.test(String(m.avatarBg || m.color || '')) ? (m.avatarBg || m.color) : meta.avatarBg,
+    icon: /^[a-z0-9_-]+$/i.test(String(m.icon || '')) ? String(m.icon) : meta.icon,
+    scope: redactSensitiveText(String(m.scope || m.duty || meta.scope)).slice(0, 400) || meta.scope,
+    tags: Array.isArray(m.tags) ? m.tags.slice(0, 12).map(t => normalizeHandle(t, 'tag')) : (typeof m.tags === 'string' ? m.tags.split(',').map(s => s.trim()).filter(Boolean).slice(0, 12).map(t => normalizeHandle(t, 'tag')) : []),
+    joinedAtPost: Number.isFinite(Number(m.joinedAtPost)) ? Number(m.joinedAtPost) : posts.length,
     retiredAtPost: m.retiredAtPost ?? null
   };
 
   if (existingIdx >= 0) {
     members[existingIdx] = { ...members[existingIdx], ...memberObj };
   } else {
+    if (members.length >= MAX_MEMBERS) {
+      const idxToDrop = members.findIndex(mem => mem.id !== '@coordinator');
+      if (idxToDrop >= 0) members.splice(idxToDrop, 1);
+    }
     members.push(memberObj);
   }
 
@@ -887,8 +986,9 @@ function getSnapshot() {
 
 // Broadcast SSE event to all connected clients
 export function broadcast(eventType, data) {
-  const payload = typeof data === 'string' ? data : JSON.stringify(data);
-  const msg = `event: ${eventType}\ndata: ${payload}\n\n`;
+  const safeEventType = String(eventType || 'message').replace(/[\r\n\0]+/g, '').slice(0, 64) || 'message';
+  const payload = typeof data === 'string' ? data.replace(/[\r\n\0]+/g, ' ') : JSON.stringify(data);
+  const msg = `event: ${safeEventType}\ndata: ${payload}\n\n`;
   for (const client of activeClients) {
     try {
       client.write(msg);
@@ -901,14 +1001,15 @@ export function broadcast(eventType, data) {
 // Append event to ~/.orca-swarm/events.jsonl and track signature
 function appendToEventLog(eventObj) {
   try {
-    const raw = JSON.stringify(eventObj);
-    const sig = `${eventObj.type || 'evt'}:${eventObj.id || ''}:${eventObj.time || ''}:${(eventObj.text || '').slice(0, 40)}`;
+    const cleanObj = redactEventPayload(eventObj);
+    const raw = JSON.stringify(cleanObj);
+    const sig = `${cleanObj.type || 'evt'}:${cleanObj.id || ''}:${cleanObj.time || ''}:${String(cleanObj.text || '').slice(0, 40)}`;
     seenEventSignatures.add(sig);
     if (seenEventSignatures.size > 5000) {
       const first = seenEventSignatures.values().next().value;
       seenEventSignatures.delete(first);
     }
-    fs.appendFileSync(EVENTS_FILE, raw + '\n', 'utf8');
+    fs.appendFileSync(EVENTS_FILE, raw + '\n', { encoding: 'utf8', mode: 0o600 });
   } catch (err) {
     console.error('[swarm-server] Error writing to events.jsonl:', err.message);
   }
@@ -917,38 +1018,40 @@ function appendToEventLog(eventObj) {
 // Ingest incoming parsed event
 function ingestEvent(event, fromTailing = false) {
   if (!event || typeof event !== 'object') return null;
+  const safeEvent = redactEventPayload(event);
 
-  const type = event.type || event.event || (event.text ? 'post' : 'unknown');
+  const type = safeEvent.type || safeEvent.event || (safeEvent.text ? 'post' : 'unknown');
 
-  if (type === 'post' || (!type && event.text && event.from)) {
-    const from = event.from || '@coordinator';
-    const text = event.text || '';
-    const to = Array.isArray(event.to) && event.to.length
-      ? event.to
-      : (event.to ? [event.to] : extractMentions(text));
+  if (type === 'post' || (!type && safeEvent.text && safeEvent.from)) {
+    const from = safeEvent.from || '@coordinator';
+    const text = safeEvent.text || '';
+    const to = Array.isArray(safeEvent.to) && safeEvent.to.length
+      ? safeEvent.to
+      : (safeEvent.to ? [safeEvent.to] : extractMentions(text));
 
     const post = {
-      num: event.num || (posts.length + 1),
-      sec: event.sec ?? Math.max(0, Math.round((Date.now() - startTime) / 1000)),
-      time: event.time || formatTime(new Date()),
-      offset: event.offset || `+${Math.max(0, Math.round((Date.now() - startTime) / 1000))}s`,
+      num: safeEvent.num || (posts.length + 1),
+      sec: safeEvent.sec ?? Math.max(0, Math.round((Date.now() - startTime) / 1000)),
+      time: safeEvent.time || formatTime(new Date()),
+      offset: safeEvent.offset || `+${Math.max(0, Math.round((Date.now() - startTime) / 1000))}s`,
       from,
       to,
       text
     };
 
     posts.push(post);
+    if (posts.length > MAX_POSTS) posts.shift();
     broadcast('post', post);
     return post;
   }
 
-  if (type === 'activity' || event.activity) {
-    const act = (typeof event.activity === 'object' && event.activity !== null) ? event.activity : event;
+  if (type === 'activity' || safeEvent.activity) {
+    const act = (typeof safeEvent.activity === 'object' && safeEvent.activity !== null) ? safeEvent.activity : safeEvent;
     const actId = act.id || `act-${activities.length + 1}`;
     const rawAgent = act.agentId || act.member || act.from || '@coordinator';
     const agentId = rawAgent.startsWith('@') ? rawAgent : `@${rawAgent}`;
     const cmdStr = (typeof act.activity === 'string' && act.activity) ? act.activity : (act.cmd || act.command || '');
-    const isRunning = act.status === 'running' || event.hook === 'PreToolUse';
+    const isRunning = act.status === 'running' || safeEvent.hook === 'PreToolUse';
     const activity = {
       id: actId,
       agentId,
@@ -965,21 +1068,22 @@ function ingestEvent(event, fromTailing = false) {
       activities[idx] = { ...activities[idx], ...activity };
     } else {
       activities.push(activity);
+      if (activities.length > MAX_ACTIVITIES) activities.shift();
     }
     broadcast('activity', activity);
     return activity;
   }
 
   if (type === 'PreToolUse') {
-    const actId = event.id || `act-pre-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-    const cmdStr = typeof event.input === 'string'
-      ? event.input
-      : (event.input?.CommandLine || event.input?.command || JSON.stringify(event.input || ''));
+    const actId = safeEvent.id || `act-pre-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const cmdStr = typeof safeEvent.input === 'string'
+      ? safeEvent.input
+      : (safeEvent.input?.CommandLine || safeEvent.input?.command || JSON.stringify(safeEvent.input || ''));
 
     const activity = {
       id: actId,
-      agentId: event.agentId || event.from || '@coder',
-      tool: event.tool || 'tool',
+      agentId: safeEvent.agentId || safeEvent.from || '@coder',
+      tool: safeEvent.tool || 'tool',
       cmd: cmdStr,
       status: 'running',
       durationSec: 0,
@@ -987,45 +1091,49 @@ function ingestEvent(event, fromTailing = false) {
       startedAt: Date.now()
     };
     activities.push(activity);
+    if (activities.length > MAX_ACTIVITIES) activities.shift();
     broadcast('activity', activity);
     return activity;
   }
 
   if (type === 'PostToolUse') {
     const runningAct = activities.slice().reverse().find(a =>
-      a.agentId === (event.agentId || event.from || '@coder') && a.status === 'running'
+      a.agentId === (safeEvent.agentId || safeEvent.from || '@coder') && a.status === 'running'
     );
     if (runningAct) {
-      runningAct.status = event.status || 'ok';
+      runningAct.status = safeEvent.status || 'ok';
       runningAct.durationSec = Math.max(1, Math.round((Date.now() - runningAct.startedAt) / 1000));
       broadcast('activity', runningAct);
       return runningAct;
     }
   }
 
-  if (type === 'member' || event.member) {
-    return registerOrUpdateMember(event.member || event);
+  if (type === 'member' || safeEvent.member) {
+    return registerOrUpdateMember(safeEvent.member || safeEvent);
   }
 
   if (type === 'agent.status.changed') {
-    const memberId = event.agent || event.id;
+    const memberId = safeEvent.agent || safeEvent.id;
     if (memberId) {
       const mem = members.find(m => m.id === memberId || m.id === `@${memberId.replace(/^@/, '')}`);
-      if (mem && event.status) {
-        mem.status = event.status;
-        broadcast('agent.status.changed', { id: mem.id, status: event.status });
+      if (mem && safeEvent.status) {
+        mem.status = safeEvent.status;
+        broadcast('agent.status.changed', { id: mem.id, status: safeEvent.status });
       }
     }
   }
 
-  if (type === 'title' && event.title) {
-    swarmTitle = event.title;
-    broadcast('title', { title: swarmTitle });
+  if (type === 'title' && typeof safeEvent.title === 'string') {
+    const cleanTitle = safeEvent.title.replace(/[\r\n\0]+/g, ' ').trim().slice(0, 120);
+    if (cleanTitle) {
+      swarmTitle = cleanTitle;
+      broadcast('title', { title: swarmTitle });
+    }
   }
 
   // Generic fallback broadcast
-  broadcast(type, event);
-  return event;
+  broadcast(type, safeEvent);
+  return safeEvent;
 }
 
 // Tail ~/.orca-swarm/events.jsonl for external event feeds
@@ -2107,7 +2215,10 @@ async function pollOrca() {
 
 function sendJson(res, statusCode, payload) {
   if (res.headersSent) return;
-  res.writeHead(statusCode, { 'Content-Type': 'application/json' });
+  res.writeHead(statusCode, {
+    'Content-Type': 'application/json',
+    'Cache-Control': 'no-store'
+  });
   res.end(JSON.stringify(payload));
 }
 
@@ -2135,7 +2246,7 @@ function readJsonBody(req, res, maxBytes = 1024 * 1024) {
           resolve({ ok: false, handled: true });
           return;
         }
-        resolve({ ok: true, data: parsed });
+        resolve({ ok: true, data: stripUnsafeKeys(parsed) });
       } catch {
         sendJson(res, 400, { ok: false, error: 'Invalid JSON body' });
         resolve({ ok: false, handled: true });
@@ -2150,12 +2261,107 @@ function readJsonBody(req, res, maxBytes = 1024 * 1024) {
   });
 }
 
+function getAllowedHostnames() {
+  const set = new Set(['127.0.0.1', 'localhost', '::1', '[::1]']);
+  if (process.env.ORCA_SWARM_HOST && process.env.ORCA_SWARM_HOST.trim()) {
+    const h = process.env.ORCA_SWARM_HOST.trim().toLowerCase();
+    if (h !== '0.0.0.0' && h !== '::') {
+      set.add(h);
+      if (h.includes(':') && !h.startsWith('[')) set.add(`[${h}]`);
+    }
+  }
+  return set;
+}
+
+function parseHostHeader(rawHost) {
+  if (!rawHost || typeof rawHost !== 'string') return null;
+  const trimmed = rawHost.trim().toLowerCase();
+  if (!trimmed || /[\s/@\\]/.test(trimmed)) return null;
+  if (trimmed.startsWith('[')) {
+    const m = trimmed.match(/^(\[[a-f0-9:]+\])(?::(\d{1,5}))?$/i);
+    if (!m) return null;
+    return { hostname: m[1], port: m[2] ? Number(m[2]) : null };
+  }
+  const colonIdx = trimmed.indexOf(':');
+  if (colonIdx === -1) return { hostname: trimmed, port: null };
+  if (trimmed.indexOf(':', colonIdx + 1) !== -1) return null;
+  const portNum = Number(trimmed.slice(colonIdx + 1));
+  if (!Number.isInteger(portNum) || portNum < 1 || portNum > 65535) return null;
+  return { hostname: trimmed.slice(0, colonIdx), port: portNum };
+}
+
+function isAllowedOrigin(originHeader, allowedHostnames, expectedPort) {
+  if (!originHeader || typeof originHeader !== 'string') return false;
+  try {
+    const u = new URL(originHeader);
+    if (u.protocol !== 'http:') return false;
+    if (!allowedHostnames.has(u.hostname.toLowerCase())) return false;
+    const originPort = u.port ? Number(u.port) : 80;
+    return originPort === expectedPort;
+  } catch {
+    return false;
+  }
+}
+
+function applySecurityHeaders(res) {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
+  res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=(), usb=()');
+}
+
+function hasValidBridgeToken(req) {
+  const headerToken = req.headers['x-orca-swarm-token'];
+  const authHeader = req.headers['authorization'];
+  let candidate = '';
+  if (typeof headerToken === 'string' && headerToken.trim()) {
+    candidate = headerToken.trim();
+  } else if (typeof authHeader === 'string' && /^Bearer\s+/i.test(authHeader)) {
+    candidate = authHeader.replace(/^Bearer\s+/i, '').trim();
+  }
+  if (!candidate) return false;
+  const a = Buffer.from(candidate, 'utf8');
+  const b = Buffer.from(BRIDGE_TOKEN, 'utf8');
+  if (a.length !== b.length) return false;
+  return crypto.timingSafeEqual(a, b);
+}
+
 // HTTP Request Handler
 async function handleRequest(req, res) {
-  // CORS Headers
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+  applySecurityHeaders(res);
+
+  const expectedPort = req.socket?.localPort || activePort || PORT;
+  const allowedHostnames = getAllowedHostnames();
+  const parsedHost = parseHostHeader(req.headers.host);
+  if (
+    !parsedHost ||
+    !allowedHostnames.has(parsedHost.hostname) ||
+    (parsedHost.port !== null && parsedHost.port !== expectedPort)
+  ) {
+    sendJson(res, 403, { ok: false, error: 'Host header blocked' });
+    return;
+  }
+
+  const secFetchSite = typeof req.headers['sec-fetch-site'] === 'string'
+    ? req.headers['sec-fetch-site'].trim().toLowerCase()
+    : '';
+  if (secFetchSite && secFetchSite !== 'same-origin' && secFetchSite !== 'none') {
+    sendJson(res, 403, { ok: false, error: 'Cross-site request blocked' });
+    return;
+  }
+
+  const originHeader = req.headers.origin;
+  if (originHeader !== undefined) {
+    if (!isAllowedOrigin(originHeader, allowedHostnames, expectedPort)) {
+      sendJson(res, 403, { ok: false, error: 'Cross-origin request blocked' });
+      return;
+    }
+    res.setHeader('Access-Control-Allow-Origin', originHeader);
+    res.setHeader('Vary', 'Origin');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Orca-Swarm-Token, Authorization');
+  }
 
   if (req.method === 'OPTIONS') {
     res.writeHead(204);
@@ -2163,7 +2369,12 @@ async function handleRequest(req, res) {
     return;
   }
 
-  const parsedUrl = new URL(req.url, `http://${req.headers.host || '127.0.0.1'}`);
+  if (req.method === 'POST' && !hasValidBridgeToken(req)) {
+    sendJson(res, 401, { ok: false, error: 'Missing or invalid X-Orca-Swarm-Token' });
+    return;
+  }
+
+  const parsedUrl = new URL(req.url, `http://127.0.0.1:${expectedPort}`);
   const pathname = parsedUrl.pathname;
 
   if (req.method === 'GET' && pathname === '/favicon.ico') {
@@ -2174,9 +2385,14 @@ async function handleRequest(req, res) {
 
   // GET /events (Server-Sent Events)
   if (req.method === 'GET' && pathname === '/events') {
+    if (activeClients.size >= MAX_SSE_CLIENTS) {
+      sendJson(res, 503, { ok: false, error: 'Too many SSE subscribers' });
+      return;
+    }
+
     res.writeHead(200, {
       'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache, no-transform',
+      'Cache-Control': 'no-cache, no-store, no-transform',
       'Connection': 'keep-alive'
     });
 
@@ -2204,67 +2420,31 @@ async function handleRequest(req, res) {
 
   // POST /events (REST webhook)
   if (req.method === 'POST' && pathname === '/events') {
-    let body = '';
-    req.on('data', chunk => {
-      body += chunk;
-      if (body.length > 5 * 1024 * 1024) {
-        res.writeHead(413, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ ok: false, error: 'Payload too large' }));
-        req.destroy();
-      }
-    });
-
-    req.on('end', () => {
-      try {
-        const parsed = JSON.parse(body || '{}');
-        const ingested = ingestEvent(parsed, false);
-        appendToEventLog(parsed);
-
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ ok: true, received: ingested }));
-      } catch (err) {
-        res.writeHead(400, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ ok: false, error: 'Invalid JSON body' }));
-      }
-    });
+    const bodyRes = await readJsonBody(req, res, 5 * 1024 * 1024);
+    if (!bodyRes.ok) return;
+    const ingested = ingestEvent(bodyRes.data, false);
+    appendToEventLog(bodyRes.data);
+    sendJson(res, 200, { ok: true, received: ingested });
     return;
   }
 
   // POST /api/members (Register custom agent)
   if (req.method === 'POST' && pathname === '/api/members') {
-    let body = '';
-    req.on('data', chunk => {
-      body += chunk;
-      if (body.length > 1024 * 1024) {
-        res.writeHead(413, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ ok: false, error: 'Payload too large' }));
-        req.destroy();
-      }
-    });
+    const bodyRes = await readJsonBody(req, res);
+    if (!bodyRes.ok) return;
+    const parsed = bodyRes.data;
+    const memberPayload =
+      parsed && typeof parsed.member === 'object' && parsed.member !== null
+        ? parsed.member
+        : parsed;
+    const registered = registerOrUpdateMember(memberPayload);
+    if (!registered) {
+      sendJson(res, 400, { ok: false, error: 'Member handle or id is required' });
+      return;
+    }
 
-    req.on('end', () => {
-      try {
-        const parsed = JSON.parse(body || '{}');
-        const memberPayload =
-          parsed && typeof parsed.member === 'object' && parsed.member !== null
-            ? parsed.member
-            : parsed;
-        const registered = registerOrUpdateMember(memberPayload);
-        if (!registered) {
-          res.writeHead(400, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ ok: false, error: 'Member handle or id is required' }));
-          return;
-        }
-
-        appendToEventLog({ type: 'member', member: registered, timestamp: Date.now() });
-
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ ok: true, member: registered }));
-      } catch (err) {
-        res.writeHead(400, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ ok: false, error: 'Invalid JSON body' }));
-      }
-    });
+    appendToEventLog({ type: 'member', member: registered, timestamp: Date.now() });
+    sendJson(res, 200, { ok: true, member: registered });
     return;
   }
 
@@ -2310,34 +2490,17 @@ async function handleRequest(req, res) {
 
   // POST /api/presets
   if (req.method === 'POST' && pathname === '/api/presets') {
-    let body = '';
-    req.on('data', chunk => {
-      body += chunk;
-      if (body.length > 1024 * 1024) {
-        res.writeHead(413, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ ok: false, error: 'Payload too large' }));
-        req.destroy();
-      }
-    });
-
-    req.on('end', () => {
-      try {
-        const parsed = JSON.parse(body || '{}');
-        const payload = parsed && typeof parsed.preset === 'object' && parsed.preset !== null ? parsed.preset : parsed;
-        if (!payload || !(payload.id || payload.handle || payload.name)) {
-          res.writeHead(400, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ ok: false, error: 'Preset id or handle is required' }));
-          return;
-        }
-        const saved = saveUserPreset(payload);
-        const presets = discoverAgentPresets();
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ ok: true, preset: saved, presets }));
-      } catch {
-        res.writeHead(400, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ ok: false, error: 'Invalid JSON body' }));
-      }
-    });
+    const bodyRes = await readJsonBody(req, res);
+    if (!bodyRes.ok) return;
+    const parsed = bodyRes.data;
+    const payload = parsed && typeof parsed.preset === 'object' && parsed.preset !== null ? parsed.preset : parsed;
+    if (!payload || !(payload.id || payload.handle || payload.name)) {
+      sendJson(res, 400, { ok: false, error: 'Preset id or handle is required' });
+      return;
+    }
+    const saved = saveUserPreset(payload);
+    const presets = discoverAgentPresets();
+    sendJson(res, 200, { ok: true, preset: saved, presets });
     return;
   }
 
@@ -2444,7 +2607,7 @@ async function handleRequest(req, res) {
     await ensureOrcaPolled();
 
     const { terminalHandle, text, enter = true, projectId, from, to } = bodyRes.data;
-    if (typeof terminalHandle !== 'string' || !/^[a-z0-9_:-]+$/i.test(terminalHandle)) {
+    if (typeof terminalHandle !== 'string' || !/^[a-z0-9][a-z0-9_:-]*$/i.test(terminalHandle)) {
       sendJson(res, 400, { ok: false, error: 'Invalid terminalHandle' });
       return;
     }
@@ -2515,7 +2678,7 @@ async function handleRequest(req, res) {
       return;
     }
     const cleanAgent = typeof targetAgent === 'string' ? targetAgent.trim() : '';
-    if (!cleanAgent || !/^[a-z0-9._-]+$/i.test(cleanAgent)) {
+    if (!cleanAgent || !/^[a-z0-9][a-z0-9._-]*$/i.test(cleanAgent)) {
       sendJson(res, 400, { ok: false, error: 'Invalid targetAgent' });
       return;
     }
@@ -2527,7 +2690,7 @@ async function handleRequest(req, res) {
     let cleanModel = '';
     if (targetModel !== undefined && targetModel !== null && String(targetModel).trim() !== '') {
       const m = String(targetModel).trim();
-      if (!/^[a-z0-9._:/-]+$/i.test(m)) {
+      if (!/^[a-z0-9][a-z0-9._:/-]*$/i.test(m)) {
         sendJson(res, 400, { ok: false, error: 'Invalid targetModel' });
         return;
       }
@@ -2562,7 +2725,7 @@ async function handleRequest(req, res) {
         sendJson(res, 400, { ok: false, error: 'repoId or sourceWorktreeId is required for new-worktree mode' });
         return;
       }
-      if (cleanRepoId && !/^[a-z0-9._:-]+$/i.test(cleanRepoId)) {
+      if (cleanRepoId && !/^[a-z0-9][a-z0-9._:-]*$/i.test(cleanRepoId)) {
         sendJson(res, 400, { ok: false, error: 'Invalid repoId' });
         return;
       }
@@ -2642,22 +2805,50 @@ async function handleRequest(req, res) {
 
   // Static file serving from bridge/public
   if (req.method === 'GET' || req.method === 'HEAD') {
-    let reqPath = pathname === '/' ? '/index.html' : pathname;
-    const safePath = path.normalize(reqPath).replace(/^(\.\.[/\\])+/, '');
-    const filePath = path.join(PUBLIC_DIR, safePath);
+    let decodedPath;
+    try {
+      decodedPath = decodeURIComponent(pathname === '/' ? '/index.html' : pathname);
+    } catch {
+      res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end('400 Bad Request');
+      return;
+    }
 
-    if (!filePath.startsWith(PUBLIC_DIR)) {
+    if (decodedPath.includes('\0') || path.posix.basename(decodedPath).startsWith('.')) {
       res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
       res.end('403 Forbidden');
       return;
     }
 
-    fs.stat(filePath, (statErr, stats) => {
-      if (statErr || !stats.isFile()) {
-        // If index.html is missing, provide a friendly placeholder
-        if (reqPath === '/index.html') {
-          res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-          res.end(`<!DOCTYPE html><html><head><title>Swarm Visualiser</title></head><body style="font-family:system-ui,sans-serif;padding:40px;background:#09090b;color:#f4f4f5"><h2>Swarm Visualiser Bridge Active</h2><p>Server listening on port ${PORT}. Awaiting index.html in bridge/public.</p><p>SSE stream available at <a href="/events" style="color:#60a5fa">/events</a>.</p></body></html>`);
+    const safeRel = path.posix.normalize(decodedPath).replace(/^(\.\.(\/|\\|$))+/, '').replace(/^\/+/, '');
+    const resolvedPath = path.resolve(PUBLIC_REAL_DIR, safeRel);
+    if (resolvedPath !== PUBLIC_REAL_DIR && !resolvedPath.startsWith(PUBLIC_REAL_DIR + path.sep)) {
+      res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end('403 Forbidden');
+      return;
+    }
+
+    const htmlCsp = [
+      "default-src 'self'",
+      "script-src 'self' 'unsafe-inline'",
+      "style-src 'self' 'unsafe-inline'",
+      "img-src 'self' data:",
+      "font-src 'self' data:",
+      "connect-src 'self'",
+      "object-src 'none'",
+      "base-uri 'self'",
+      "form-action 'self'"
+    ].join('; ');
+
+    fs.realpath(resolvedPath, (realErr, realFile) => {
+      if (realErr) {
+        if (decodedPath === '/index.html') {
+          res.writeHead(200, {
+            'Content-Type': 'text/html; charset=utf-8',
+            'Content-Security-Policy': htmlCsp,
+            'Cache-Control': 'no-store'
+          });
+          res.end(`<!DOCTYPE html><html><head><meta name="orca-swarm-token" content="${BRIDGE_TOKEN}"><title>Swarm Visualiser</title></head><body style="font-family:system-ui,sans-serif;padding:40px;background:#09090b;color:#f4f4f5"><h2>Swarm Visualiser Bridge Active</h2><p>Server listening on port ${expectedPort}. Awaiting index.html in bridge/public.</p><p>SSE stream available at <a href="/events" style="color:#60a5fa">/events</a>.</p></body></html>`);
           return;
         }
         res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
@@ -2665,26 +2856,77 @@ async function handleRequest(req, res) {
         return;
       }
 
-      const ext = path.extname(filePath).toLowerCase();
-      const contentType = MIME_TYPES[ext] || 'application/octet-stream';
-
-      res.writeHead(200, {
-        'Content-Type': contentType,
-        'Content-Length': stats.size,
-        'Cache-Control': 'no-cache'
-      });
-
-      if (req.method === 'HEAD') {
-        res.end();
+      if (realFile !== PUBLIC_REAL_DIR && !realFile.startsWith(PUBLIC_REAL_DIR + path.sep)) {
+        res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
+        res.end('403 Forbidden');
         return;
       }
 
-      const stream = fs.createReadStream(filePath);
-      stream.on('error', () => {
-        if (!res.headersSent) res.writeHead(500);
-        res.end();
+      fs.stat(realFile, (statErr, stats) => {
+        if (statErr || !stats.isFile()) {
+          res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+          res.end('404 Not Found');
+          return;
+        }
+
+        const ext = path.extname(realFile).toLowerCase();
+        const contentType = MIME_TYPES[ext];
+        if (!contentType) {
+          res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
+          res.end('403 Forbidden');
+          return;
+        }
+
+        if (ext === '.html' || ext === '.htm') {
+          fs.readFile(realFile, 'utf8', (readErr, htmlRaw) => {
+            if (readErr) {
+              if (!res.headersSent) res.writeHead(500);
+              res.end();
+              return;
+            }
+            const injectedHtml = htmlRaw.includes('<meta name="orca-swarm-token"')
+              ? htmlRaw.replace(
+                  /<meta\s+name="orca-swarm-token"\s+content="[^"]*"\s*\/?>/i,
+                  `<meta name="orca-swarm-token" content="${BRIDGE_TOKEN}" />`
+                )
+              : htmlRaw.replace(
+                  /<head>/i,
+                  `<head>\n  <meta name="orca-swarm-token" content="${BRIDGE_TOKEN}" />`
+                );
+            const buf = Buffer.from(injectedHtml, 'utf8');
+            res.writeHead(200, {
+              'Content-Type': contentType,
+              'Content-Length': buf.length,
+              'Content-Security-Policy': htmlCsp,
+              'Cache-Control': 'no-store'
+            });
+            if (req.method === 'HEAD') {
+              res.end();
+              return;
+            }
+            res.end(buf);
+          });
+          return;
+        }
+
+        res.writeHead(200, {
+          'Content-Type': contentType,
+          'Content-Length': stats.size,
+          'Cache-Control': 'no-cache'
+        });
+
+        if (req.method === 'HEAD') {
+          res.end();
+          return;
+        }
+
+        const stream = fs.createReadStream(realFile);
+        stream.on('error', () => {
+          if (!res.headersSent) res.writeHead(500);
+          res.end();
+        });
+        stream.pipe(res);
       });
-      stream.pipe(res);
     });
     return;
   }
@@ -2698,8 +2940,9 @@ async function handleRequest(req, res) {
 export function createServer() {
   return http.createServer((req, res) => {
     Promise.resolve(handleRequest(req, res)).catch(err => {
+      console.error('[swarm-server] Request error:', err);
       if (!res.headersSent) {
-        sendJson(res, 500, { ok: false, error: err?.message || 'Internal server error' });
+        sendJson(res, 500, { ok: false, error: 'Internal server error' });
       } else {
         res.end();
       }
@@ -2708,13 +2951,20 @@ export function createServer() {
 }
 
 export function startServer(port = PORT, host = HOST) {
+  ensureSwarmStorage({ writeToken: true });
   activePort = port;
   const server = createServer();
 
   server.listen(port, host, () => {
-    console.log(`[swarm-server] Swarm Visualiser Bridge running at http://127.0.0.1:${port}`);
+    const addr = server.address();
+    if (addr && typeof addr === 'object' && addr.port) {
+      activePort = addr.port;
+    }
+    const displayHost = host === '0.0.0.0' ? '127.0.0.1' : host;
+    console.log(`[swarm-server] Swarm Visualiser Bridge running at http://${displayHost}:${activePort}`);
     console.log(`[swarm-server] Static files served from ${PUBLIC_DIR}`);
-    console.log(`[swarm-server] SSE feed at http://127.0.0.1:${port}/events`);
+    console.log(`[swarm-server] SSE feed at http://${displayHost}:${activePort}/events`);
+    console.log(`[swarm-server] Auth token stored (0600) at ${TOKEN_FILE}`);
     console.log(`[swarm-server] Event log active at ${EVENTS_FILE}`);
   });
 

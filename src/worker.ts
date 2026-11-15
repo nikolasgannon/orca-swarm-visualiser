@@ -19,10 +19,12 @@ function appendEvent(eventData: Record<string, unknown>): void {
   try {
     const dir = path.dirname(EVENTS_FILE);
     if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
+      fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
     }
+    try { fs.chmodSync(dir, 0o700); } catch {}
     const line = JSON.stringify(eventData) + '\n';
-    fs.appendFileSync(EVENTS_FILE, line, 'utf8');
+    fs.appendFileSync(EVENTS_FILE, line, { encoding: 'utf8', mode: 0o600 });
+    try { fs.chmodSync(EVENTS_FILE, 0o600); } catch {}
   } catch (err) {
     console.error('[orca-swarm-visualiser] Failed to append event to events.jsonl:', err);
   }
@@ -92,6 +94,7 @@ async function startServerIfNotRunning(port = DEFAULT_PORT): Promise<void> {
       stdio: 'ignore',
       env: {
         ...process.env,
+        ORCA_SWARM_HOST: process.env.ORCA_SWARM_HOST || '127.0.0.1',
         ORCA_SWARM_PORT: String(port)
       }
     });
@@ -112,7 +115,8 @@ async function startServerIfNotRunning(port = DEFAULT_PORT): Promise<void> {
  * Plugin activation hook called by Orca.
  */
 export default async function activate(orca: OrcaWorkerApi): Promise<void> {
-  const port = parseInt(process.env.ORCA_SWARM_PORT || String(DEFAULT_PORT), 10);
+  const parsedPort = parseInt(process.env.ORCA_SWARM_PORT || String(DEFAULT_PORT), 10);
+  const port = Number.isInteger(parsedPort) && parsedPort >= 1 && parsedPort <= 65535 ? parsedPort : DEFAULT_PORT;
 
   // 1. Start bridge server in the background if not running
   await startServerIfNotRunning(port);
