@@ -19,6 +19,7 @@ export const ORCA_SWARM_DIR = path.join(os.homedir(), '.orca-swarm');
 export const EVENTS_FILE = path.join(ORCA_SWARM_DIR, 'events.jsonl');
 export const PRESETS_FILE = path.join(ORCA_SWARM_DIR, 'presets.json');
 export const TOKEN_FILE = path.join(ORCA_SWARM_DIR, 'bridge.token');
+export const WORKER_IPC_FILE = path.join(ORCA_SWARM_DIR, 'worker-ipc.json');
 export const BRIDGE_TOKEN = (process.env.ORCA_SWARM_TOKEN && process.env.ORCA_SWARM_TOKEN.trim())
   || crypto.randomBytes(32).toString('hex');
 let activePort = PORT;
@@ -27,6 +28,9 @@ const MAX_POSTS = 500;
 const MAX_ACTIVITIES = 500;
 const MAX_MEMBERS = 200;
 const MAX_SSE_CLIENTS = 64;
+const POLL_ACTIVE_INTERVAL_MS = 1500;
+const POLL_IDLE_INTERVAL_MS = 15000;
+const POLL_EVENT_DEBOUNCE_MS = 200;
 
 function ensureSwarmStorage({ writeToken = false } = {}) {
   try {
@@ -907,6 +911,8 @@ let processes = [];
 let orcaProjects = [];
 let activeOrcaProjectId = null;
 let activeOrcaWorktreeId = null;
+let activeWorkspaceListId = null;
+let activeOrcaWorkspaceId = null;
 let activeWorktreePath = null;
 let activeBranch = null;
 let orcaStatus = {
@@ -915,6 +921,21 @@ let orcaStatus = {
   message: 'Connecting to Orca runtime',
   lastChecked: null
 };
+
+function normalizeMainAgent(rawMainAgent, fallbackState = null, fallbackOutcome = null) {
+  const hasMain = rawMainAgent && typeof rawMainAgent === 'object';
+  const rawOutcome = hasMain && rawMainAgent.outcome ? String(rawMainAgent.outcome).trim() : (fallbackOutcome ? String(fallbackOutcome).trim() : '');
+  const rawState = hasMain && rawMainAgent.state ? String(rawMainAgent.state).trim() : (fallbackState ? String(fallbackState).trim() : '');
+  if (!hasMain && !rawOutcome) return null;
+  const stateStartedAt = hasMain && Number.isFinite(Number(rawMainAgent.stateStartedAt))
+    ? Number(rawMainAgent.stateStartedAt)
+    : null;
+  return {
+    state: rawState || null,
+    outcome: rawOutcome || null,
+    stateStartedAt
+  };
+}
 
 function formatTime(d = new Date()) {
   return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
@@ -936,6 +957,7 @@ function registerOrUpdateMember(m) {
   const detected = detectAgentType(m.model || m.role || id);
   const meta = AGENT_TYPE_META[detected] || AGENT_TYPE_META.terminal;
 
+  const mainAgent = normalizeMainAgent(m.mainAgent, m.liveState || m.status, m.outcome);
   const memberObj = {
     id,
     role: redactSensitiveText(String(m.role || meta.role)).slice(0, 120) || meta.role,
@@ -945,7 +967,12 @@ function registerOrUpdateMember(m) {
     scope: redactSensitiveText(String(m.scope || m.duty || meta.scope)).slice(0, 400) || meta.scope,
     tags: Array.isArray(m.tags) ? m.tags.slice(0, 12).map(t => normalizeHandle(t, 'tag')) : (typeof m.tags === 'string' ? m.tags.split(',').map(s => s.trim()).filter(Boolean).slice(0, 12).map(t => normalizeHandle(t, 'tag')) : []),
     joinedAtPost: Number.isFinite(Number(m.joinedAtPost)) ? Number(m.joinedAtPost) : posts.length,
-    retiredAtPost: m.retiredAtPost ?? null
+    retiredAtPost: m.retiredAtPost ?? null,
+    ...(typeof m.sessionId === 'string' && m.sessionId.trim() ? { sessionId: m.sessionId.trim() } : {}),
+    ...(typeof m.workspaceId === 'string' && m.workspaceId.trim() ? { workspaceId: m.workspaceId.trim() } : {}),
+    ...(typeof m.workspaceListId === 'string' && m.workspaceListId.trim() ? { workspaceListId: m.workspaceListId.trim() } : {}),
+    ...(mainAgent ? { mainAgent } : {}),
+    ...(mainAgent?.outcome || m.outcome ? { outcome: mainAgent?.outcome || String(m.outcome) } : {})
   };
 
   if (existingIdx >= 0) {
@@ -977,9 +1004,12 @@ function getSnapshot() {
     orcaProjects,
     activeOrcaProjectId,
     activeOrcaWorktreeId,
+    activeWorkspaceListId,
+    activeOrcaWorkspaceId,
     activeWorktreePath,
     activeBranch,
     orcaStatus,
+    hostApiTarget: '1.7-1.9',
     timestamp: Date.now()
   };
 }
@@ -998,12 +1028,21 @@ export function broadcast(eventType, data) {
   }
 }
 
+function computeEventSignature(obj) {
+  if (!obj || typeof obj !== 'object') return 'evt:';
+  const base = `${obj.type || 'evt'}:${obj.id || ''}:${obj.time || obj.timestamp || obj.receivedAt || ''}`;
+  const detail = obj.text
+    ? String(obj.text).slice(0, 40)
+    : `${obj.paneKey || obj.terminalId || obj.workspaceId || obj.workspaceListId || ''}:${obj.state || obj.status || ''}:${obj.mainAgent?.outcome || obj.outcome || ''}`;
+  return `${base}:${detail}`;
+}
+
 // Append event to ~/.orca-swarm/events.jsonl and track signature
 function appendToEventLog(eventObj) {
   try {
     const cleanObj = redactEventPayload(eventObj);
     const raw = JSON.stringify(cleanObj);
-    const sig = `${cleanObj.type || 'evt'}:${cleanObj.id || ''}:${cleanObj.time || ''}:${String(cleanObj.text || '').slice(0, 40)}`;
+    const sig = computeEventSignature(cleanObj);
     seenEventSignatures.add(sig);
     if (seenEventSignatures.size > 5000) {
       const first = seenEventSignatures.values().next().value;
@@ -1108,19 +1147,83 @@ function ingestEvent(event, fromTailing = false) {
     }
   }
 
-  if (type === 'member' || safeEvent.member) {
-    return registerOrUpdateMember(safeEvent.member || safeEvent);
-  }
-
   if (type === 'agent.status.changed') {
-    const memberId = safeEvent.agent || safeEvent.id;
-    if (memberId) {
-      const mem = members.find(m => m.id === memberId || m.id === `@${memberId.replace(/^@/, '')}`);
-      if (mem && safeEvent.status) {
-        mem.status = safeEvent.status;
-        broadcast('agent.status.changed', { id: mem.id, status: safeEvent.status });
+    const rawMemberId = typeof (safeEvent.agent || safeEvent.id || safeEvent.member) === 'string'
+      ? (safeEvent.agent || safeEvent.id || safeEvent.member)
+      : '';
+    const terminalId = typeof safeEvent.terminalId === 'string' && safeEvent.terminalId.trim() ? safeEvent.terminalId.trim() : null;
+    const paneKey = typeof safeEvent.paneKey === 'string' && safeEvent.paneKey.trim() ? safeEvent.paneKey.trim() : null;
+    const workspaceId = typeof safeEvent.workspaceId === 'string' && safeEvent.workspaceId.trim() ? safeEvent.workspaceId.trim() : null;
+    const workspaceListId = typeof safeEvent.workspaceListId === 'string' && safeEvent.workspaceListId.trim() ? safeEvent.workspaceListId.trim() : null;
+    const sessionId = typeof safeEvent.sessionId === 'string' && safeEvent.sessionId.trim() ? safeEvent.sessionId.trim() : null;
+    const rawState = safeEvent.status || safeEvent.state || safeEvent.mainAgent?.state || null;
+    const mainAgent = normalizeMainAgent(safeEvent.mainAgent, rawState, safeEvent.outcome);
+    const outcome = mainAgent?.outcome || (typeof safeEvent.outcome === 'string' && safeEvent.outcome.trim() ? safeEvent.outcome.trim() : null);
+    const mappedState = rawState ? mapOrcaState(rawState) : undefined;
+
+    let matchedId = null;
+    const normalizedCandidate = rawMemberId ? normalizeHandle(rawMemberId) : null;
+
+    const applyStatusUpdate = (target) => {
+      if (!target) return;
+      if (rawState) {
+        target.status = rawState;
+        target.liveState = mappedState;
+      }
+      if (sessionId) target.sessionId = sessionId;
+      if (workspaceId) target.workspaceId = workspaceId;
+      if (workspaceListId) target.workspaceListId = workspaceListId;
+      if (mainAgent) target.mainAgent = mainAgent;
+      if (outcome !== null) target.outcome = outcome;
+      matchedId = target.id;
+    };
+
+    const demoMatch = members.find(m =>
+      (normalizedCandidate && (m.id === rawMemberId || m.id === normalizedCandidate)) ||
+      (terminalId && m.terminalHandle === terminalId)
+    );
+    applyStatusUpdate(demoMatch);
+
+    for (const proj of orcaProjects) {
+      for (const pm of proj.members || []) {
+        const isMatch =
+          (terminalId && (pm.terminalHandle === terminalId || pm.terminalId === terminalId)) ||
+          (paneKey && pm.paneKey === paneKey) ||
+          (sessionId && pm.sessionId === sessionId) ||
+          (normalizedCandidate && (pm.id === rawMemberId || pm.id === normalizedCandidate));
+        if (isMatch) applyStatusUpdate(pm);
       }
     }
+
+    const statusPayload = {
+      id: matchedId || normalizedCandidate || rawMemberId || terminalId || paneKey || '@agent',
+      member: matchedId || normalizedCandidate || rawMemberId || null,
+      status: rawState,
+      state: rawState,
+      ...(mappedState ? { liveState: mappedState } : {}),
+      ...(sessionId ? { sessionId } : {}),
+      ...(workspaceId ? { workspaceId } : {}),
+      ...(workspaceListId ? { workspaceListId } : {}),
+      ...(terminalId ? { terminalId } : {}),
+      ...(paneKey ? { paneKey } : {}),
+      ...(mainAgent ? { mainAgent } : {}),
+      ...(outcome ? { outcome } : {}),
+      receivedAt: safeEvent.receivedAt || Date.now()
+    };
+
+    broadcast('agent.status.changed', statusPayload);
+    triggerImmediatePoll({ minGapMs: POLL_EVENT_DEBOUNCE_MS });
+    return statusPayload;
+  }
+
+  if (type === 'workspace.created' || type === 'workspace.removed' || type === 'workspace.changed' || type === 'orca.refresh') {
+    broadcast(type, safeEvent);
+    triggerImmediatePoll({ minGapMs: POLL_EVENT_DEBOUNCE_MS });
+    return safeEvent;
+  }
+
+  if (type === 'member' || (safeEvent.member && typeof safeEvent.member === 'object')) {
+    return registerOrUpdateMember(safeEvent.member || safeEvent);
   }
 
   if (type === 'title' && typeof safeEvent.title === 'string') {
@@ -1129,6 +1232,7 @@ function ingestEvent(event, fromTailing = false) {
       swarmTitle = cleanTitle;
       broadcast('title', { title: swarmTitle });
     }
+    return safeEvent;
   }
 
   // Generic fallback broadcast
@@ -1138,6 +1242,7 @@ function ingestEvent(event, fromTailing = false) {
 
 // Tail ~/.orca-swarm/events.jsonl for external event feeds
 let tailOffset = 0;
+let tailTimer = null;
 function initTailer() {
   try {
     if (fs.existsSync(EVENTS_FILE)) {
@@ -1148,7 +1253,8 @@ function initTailer() {
     tailOffset = 0;
   }
 
-  setInterval(() => {
+  if (tailTimer) clearInterval(tailTimer);
+  tailTimer = setInterval(() => {
     try {
       if (!fs.existsSync(EVENTS_FILE)) return;
       const stat = fs.statSync(EVENTS_FILE);
@@ -1174,7 +1280,7 @@ function initTailer() {
             if (!trimmed) continue;
             try {
               const parsed = JSON.parse(trimmed);
-              const sig = `${parsed.type || 'evt'}:${parsed.id || ''}:${parsed.time || ''}:${(parsed.text || '').slice(0, 40)}`;
+              const sig = computeEventSignature(parsed);
               if (seenEventSignatures.has(sig)) continue;
               seenEventSignatures.add(sig);
               ingestEvent(parsed, true);
@@ -1188,6 +1294,7 @@ function initTailer() {
       // Gracefully ignore filesystem tail errors
     }
   }, 400);
+  if (typeof tailTimer.unref === 'function') tailTimer.unref();
 }
 
 // Orca & Git CLI Execution (always execFile, never shell exec)
@@ -1433,15 +1540,127 @@ function getKnownWorktreePaths() {
 
 function getKnownWorktreeIds() {
   const set = new Set();
-  for (const w of worktrees) {
+  for (const w of [...worktrees, ...processes]) {
     if (w?.worktreeId) set.add(w.worktreeId);
     if (w?.id) set.add(w.id);
-  }
-  for (const w of processes) {
-    if (w?.worktreeId) set.add(w.worktreeId);
-    if (w?.id) set.add(w.id);
+    if (w?.workspaceListId) set.add(w.workspaceListId);
+    if (w?.identity?.key) set.add(w.identity.key);
   }
   return set;
+}
+
+function findKnownWorktreeRecord(selectorId) {
+  if (!selectorId) return null;
+  for (const w of [...processes, ...worktrees]) {
+    if (
+      w?.worktreeId === selectorId ||
+      w?.id === selectorId ||
+      w?.workspaceListId === selectorId ||
+      w?.identity?.key === selectorId
+    ) {
+      return w;
+    }
+  }
+  return null;
+}
+
+function readWorkerIpcConfig() {
+  try {
+    if (!fs.existsSync(WORKER_IPC_FILE)) return null;
+    const raw = JSON.parse(fs.readFileSync(WORKER_IPC_FILE, 'utf8'));
+    if (!raw || typeof raw !== 'object') return null;
+    const port = Number(raw.port);
+    const token = typeof raw.token === 'string' ? raw.token.trim() : '';
+    if (!Number.isInteger(port) || port < 1 || port > 65535) return null;
+    if (!token || token.length < 16 || /[\r\n\0]/.test(token)) return null;
+    return { port, token, pid: Number.isInteger(Number(raw.pid)) ? Number(raw.pid) : null };
+  } catch {
+    return null;
+  }
+}
+
+function callWorkerIpc(ipcPath, bodyPayload = {}, timeoutMs = 5000) {
+  const cfg = readWorkerIpcConfig();
+  if (!cfg) {
+    return Promise.resolve({
+      ok: false,
+      unavailable: true,
+      code: 'worker_ipc_unavailable',
+      error: 'Orca worker IPC is not active'
+    });
+  }
+
+  return new Promise(resolve => {
+    const payloadStr = JSON.stringify(bodyPayload || {});
+    let settled = false;
+    const finish = result => {
+      if (settled) return;
+      settled = true;
+      resolve(result);
+    };
+
+    const req = http.request(
+      {
+        hostname: '127.0.0.1',
+        port: cfg.port,
+        path: ipcPath,
+        method: 'POST',
+        timeout: timeoutMs,
+        headers: {
+          Host: `127.0.0.1:${cfg.port}`,
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(payloadStr, 'utf8'),
+          'X-Orca-Worker-Token': cfg.token
+        }
+      },
+      res => {
+        let raw = '';
+        res.setEncoding('utf8');
+        res.on('data', chunk => {
+          raw += chunk;
+          if (raw.length > 2 * 1024 * 1024) {
+            req.destroy();
+            finish({ ok: false, unavailable: false, code: 'response_too_large', error: 'Worker IPC response too large' });
+          }
+        });
+        res.on('end', () => {
+          try {
+            const parsed = stripUnsafeKeys(JSON.parse(raw || '{}'));
+            if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300 && parsed?.ok !== false) {
+              finish({ ok: true, data: parsed });
+            } else {
+              finish({
+                ok: false,
+                unavailable: false,
+                statusCode: res.statusCode || 502,
+                code: parsed?.code || 'worker_ipc_error',
+                error: redactSensitiveText(String(parsed?.error || `Worker IPC HTTP ${res.statusCode || 502}`))
+              });
+            }
+          } catch {
+            finish({ ok: false, unavailable: false, code: 'invalid_ipc_json', error: 'Invalid JSON from worker IPC' });
+          }
+        });
+      }
+    );
+
+    req.on('timeout', () => {
+      req.destroy();
+      finish({ ok: false, unavailable: true, code: 'worker_ipc_timeout', error: 'Worker IPC timed out' });
+    });
+
+    req.on('error', err => {
+      const connErr = err?.code === 'ECONNREFUSED' || err?.code === 'ECONNRESET' || err?.code === 'ENOTFOUND';
+      finish({
+        ok: false,
+        unavailable: connErr,
+        code: connErr ? 'worker_ipc_unavailable' : 'worker_ipc_error',
+        error: redactSensitiveText(err?.message || 'Worker IPC connection failed')
+      });
+    });
+
+    req.end(payloadStr);
+  });
 }
 
 const SAFE_CLI_AGENTS = new Set(['claude', 'codex', 'opencode', 'gemini']);
@@ -1722,7 +1941,8 @@ function truncateText(str, max = 220) {
 function mapOrcaState(state) {
   const s = String(state || '').toLowerCase();
   if (s === 'working' || s === 'running' || s === 'active') return 'active';
-  if (s === 'blocked' || s === 'error' || s === 'failed') return 'blocked';
+  if (s === 'blocked' || s === 'error' || s === 'failed' || s === 'permission') return 'blocked';
+  if (s === 'done' || s === 'completed' || s === 'finished') return 'done';
   return 'waiting';
 }
 
@@ -1737,6 +1957,7 @@ function buildOrcaProjects(wtList, psWorktrees, termList, gitFilesByPath = new M
   const termsByWorktree = new Map();
   for (const t of termList) {
     if (t.tabId && t.leafId) termsByPane.set(`${t.tabId}:${t.leafId}`, t);
+    if (t.recordedPaneKey) termsByPane.set(t.recordedPaneKey, t);
     const wtKey = t.worktreeId || t.worktreePath;
     if (wtKey) {
       if (!termsByWorktree.has(wtKey)) termsByWorktree.set(wtKey, []);
@@ -1875,6 +2096,8 @@ function buildOrcaProjects(wtList, psWorktrees, termList, gitFilesByPath = new M
     // First pass: map worktree handles so child worktrees and agents can link to parent worktrees
     for (const w of orderedWts) {
       const wtId = w.worktreeId || w.id || w.path;
+      const workspaceListId = w.workspaceListId || w.worktreeId || w.id || null;
+      const workspaceId = w.workspaceId || w.identity?.key || wtId || null;
       const wtLabel = w.displayName || (w.branch ? w.branch.replace(/^refs\/heads\//, '') : '') || path.basename(w.path || '') || 'worktree';
       const branchShort = (w.branch || '').replace(/^refs\/heads\//, '') || wtLabel;
       const wtSlug = slugify(wtLabel, 'wt');
@@ -1907,6 +2130,8 @@ function buildOrcaProjects(wtList, psWorktrees, termList, gitFilesByPath = new M
           tags: ['@worktree'],
           liveState: wtLive,
           worktreeId: wtId,
+          workspaceId,
+          workspaceListId,
           worktreePath: wtPath,
           branch: branchShort,
           repoId: wtRepoId,
@@ -1942,11 +2167,19 @@ function buildOrcaProjects(wtList, psWorktrees, termList, gitFilesByPath = new M
         const handle = uniqueHandle(`${rawType}-${slugify(label, 'agent').slice(0, 16)}`);
         agentHandleByPane.set(paneKey, handle);
 
-        const liveState = mapOrcaState(ag.state);
+        const liveState = mapOrcaState(ag.state || ag.mainAgent?.state);
         if (liveState === 'active') activeCount++;
         const isSub = Boolean(ag.parentPaneKey);
         const matchedTerm = (paneKey && termsByPane.get(paneKey)) || null;
-        const agentTerminalHandle = (matchedTerm && matchedTerm.handle) || ag.terminalHandle || primaryTermHandle || null;
+        const fallbackTerm = (ag.hasLivePty === false && liveState === 'done') ? null : primaryTermHandle;
+        const agentTerminalHandle = (matchedTerm && matchedTerm.handle) || ag.terminalHandle || ag.terminalId || fallbackTerm || null;
+        const sessionId = (typeof ag.sessionId === 'string' && ag.sessionId.trim())
+          ? ag.sessionId.trim()
+          : ((typeof ag.orcaSessionId === 'string' && ag.orcaSessionId.trim()) ? ag.orcaSessionId.trim() : null);
+        const mainAgent = normalizeMainAgent(ag.mainAgent, ag.state, ag.outcome);
+        const outcome = mainAgent?.outcome || null;
+        const agentWorkspaceId = (typeof ag.workspaceId === 'string' && ag.workspaceId.trim()) ? ag.workspaceId.trim() : workspaceId;
+        const agentWorkspaceListId = (typeof ag.workspaceListId === 'string' && ag.workspaceListId.trim()) ? ag.workspaceListId.trim() : workspaceListId;
 
         projMembers.push({
           id: handle,
@@ -1957,11 +2190,18 @@ function buildOrcaProjects(wtList, psWorktrees, termList, gitFilesByPath = new M
           scope: truncateText(ag.conversationName || ag.taskTitle || ag.prompt || w.path || '', 120),
           tags: isSub ? ['@subagent', `@${rawType}`] : [`@${rawType}`, `@${wtSlug}`],
           liveState,
+          paneKey,
+          sessionId,
+          mainAgent,
+          outcome,
           worktreeId: wtId,
+          workspaceId: agentWorkspaceId,
+          workspaceListId: agentWorkspaceListId,
           worktreePath: wtPath,
           branch: branchShort,
           repoId: wtRepoId,
           terminalHandle: agentTerminalHandle,
+          terminalId: agentTerminalHandle,
           changedFilesCount: wtChangedCount,
           collisionCount: wtCollisionCount,
           joinedAtPost: 0,
@@ -2070,6 +2310,57 @@ function buildOrcaProjects(wtList, psWorktrees, termList, gitFilesByPath = new M
 
 let pollInFlight = false;
 let activePollPromise = null;
+let pollTimer = null;
+let immediatePollTimer = null;
+let pollLoopStarted = false;
+let pollStopped = false;
+let lastPollCompletedAt = 0;
+
+export function getPollIntervalMs() {
+  return activeClients.size > 0 ? POLL_ACTIVE_INTERVAL_MS : POLL_IDLE_INTERVAL_MS;
+}
+
+function scheduleNextPoll(delayMs = getPollIntervalMs()) {
+  if (!pollLoopStarted || pollStopped) return;
+  if (pollTimer) {
+    clearTimeout(pollTimer);
+    pollTimer = null;
+  }
+  pollTimer = setTimeout(async () => {
+    pollTimer = null;
+    if (pollStopped) return;
+    await pollOrca();
+    scheduleNextPoll();
+  }, delayMs);
+  if (typeof pollTimer.unref === 'function') pollTimer.unref();
+}
+
+function triggerImmediatePoll({ minGapMs = POLL_EVENT_DEBOUNCE_MS } = {}) {
+  if (pollStopped) return;
+  if (pollTimer) {
+    clearTimeout(pollTimer);
+    pollTimer = null;
+  }
+  const elapsed = Date.now() - lastPollCompletedAt;
+  const waitMs = lastPollCompletedAt > 0 && elapsed < minGapMs ? (minGapMs - elapsed) : 0;
+
+  if (waitMs > 0) {
+    if (immediatePollTimer) return;
+    immediatePollTimer = setTimeout(() => {
+      immediatePollTimer = null;
+      if (pollStopped) return;
+      pollOrca().finally(() => scheduleNextPoll());
+    }, waitMs);
+    if (typeof immediatePollTimer.unref === 'function') immediatePollTimer.unref();
+    return;
+  }
+
+  if (immediatePollTimer) {
+    clearTimeout(immediatePollTimer);
+    immediatePollTimer = null;
+  }
+  pollOrca().finally(() => scheduleNextPoll());
+}
 
 async function ensureOrcaPolled() {
   if (orcaStatus.lastChecked !== null) return;
@@ -2107,6 +2398,8 @@ async function pollOrca() {
         const prevAvailable = orcaStatus.available;
         activeOrcaProjectId = null;
         activeOrcaWorktreeId = null;
+        activeWorkspaceListId = null;
+        activeOrcaWorkspaceId = null;
         activeWorktreePath = null;
         activeBranch = null;
         orcaStatus = {
@@ -2128,11 +2421,15 @@ async function pollOrca() {
       const activeWt = activeWtUnwrapped?.worktree || null;
       const nextActiveProjectId = activeWt?.projectId || null;
       const nextActiveWorktreeId = activeWt?.id || null;
+      const nextActiveWorkspaceListId = activeWt?.id || activeWt?.worktreeId || null;
+      const nextActiveWorkspaceId = activeWt?.identity?.key || activeWt?.id || null;
       const nextActiveWorktreePath = activeWt?.path || null;
       const nextActiveBranch = activeWt?.branch ? String(activeWt.branch).replace(/^refs\/heads\//, '') : null;
       const activeChanged =
         nextActiveProjectId !== activeOrcaProjectId ||
         nextActiveWorktreeId !== activeOrcaWorktreeId ||
+        nextActiveWorkspaceListId !== activeWorkspaceListId ||
+        nextActiveWorkspaceId !== activeOrcaWorkspaceId ||
         nextActiveWorktreePath !== activeWorktreePath ||
         nextActiveBranch !== activeBranch;
 
@@ -2177,6 +2474,8 @@ async function pollOrca() {
       orcaProjects = newOrcaProjects;
       activeOrcaProjectId = nextActiveProjectId;
       activeOrcaWorktreeId = nextActiveWorktreeId;
+      activeWorkspaceListId = nextActiveWorkspaceListId;
+      activeOrcaWorkspaceId = nextActiveWorkspaceId;
       activeWorktreePath = nextActiveWorktreePath;
       activeBranch = nextActiveBranch;
       orcaStatus = {
@@ -2194,6 +2493,8 @@ async function pollOrca() {
           orcaStatus,
           activeOrcaProjectId,
           activeOrcaWorktreeId,
+          activeWorkspaceListId,
+          activeOrcaWorkspaceId,
           activeWorktreePath,
           activeBranch
         });
@@ -2208,6 +2509,7 @@ async function pollOrca() {
     } finally {
       pollInFlight = false;
       activePollPromise = null;
+      lastPollCompletedAt = Date.now();
     }
   })();
   return activePollPromise;
@@ -2409,11 +2711,18 @@ async function handleRequest(req, res) {
       }
     }, 15000);
 
+    const wasIdle = activeClients.size === 0;
     activeClients.add(res);
+    if (wasIdle || Date.now() - lastPollCompletedAt > POLL_ACTIVE_INTERVAL_MS) {
+      triggerImmediatePoll({ minGapMs: 0 });
+    }
 
     req.on('close', () => {
       clearInterval(keepAliveTimer);
       activeClients.delete(res);
+      if (activeClients.size === 0 && pollLoopStarted && !pollStopped) {
+        scheduleNextPoll(POLL_IDLE_INTERVAL_MS);
+      }
     });
     return;
   }
@@ -2784,6 +3093,294 @@ async function handleRequest(req, res) {
     return;
   }
 
+  // POST /api/terminal/focus
+  if (req.method === 'POST' && pathname === '/api/terminal/focus') {
+    const bodyRes = await readJsonBody(req, res);
+    if (!bodyRes.ok) return;
+    await ensureOrcaPolled();
+
+    const { terminalHandle, worktreeId, worktreePath } = bodyRes.data;
+    if (terminalHandle !== undefined && terminalHandle !== null && String(terminalHandle).trim() !== '') {
+      const cleanHandle = String(terminalHandle).trim();
+      if (!/^[a-z0-9][a-z0-9_:-]*$/i.test(cleanHandle)) {
+        sendJson(res, 400, { ok: false, error: 'Invalid terminalHandle' });
+        return;
+      }
+      if (orcaStatus.available && !terminals.some(t => t.handle === cleanHandle)) {
+        sendJson(res, 400, { ok: false, error: 'Unknown or offline terminalHandle' });
+        return;
+      }
+
+      const rpcRes = await execJson(
+        orcaBin,
+        ['terminal', 'switch', '--terminal', cleanHandle, '--json'],
+        { timeout: 8000 }
+      );
+      if (!rpcRes || rpcRes.ok === false) {
+        sendJson(res, 502, {
+          ok: false,
+          error: redactSensitiveText(rpcRes?.error?.message || 'Failed to focus terminal in Orca')
+        });
+        return;
+      }
+
+      sendJson(res, 200, {
+        ok: true,
+        method: 'terminal.switch',
+        terminalHandle: cleanHandle,
+        focused: true,
+        result: unwrapOrcaResult(rpcRes)
+      });
+      return;
+    }
+
+    const cleanWtId = typeof worktreeId === 'string' ? worktreeId.trim() : '';
+    const cleanWtPath = typeof worktreePath === 'string' ? worktreePath.trim() : '';
+    if (!cleanWtId && !cleanWtPath) {
+      sendJson(res, 400, { ok: false, error: 'terminalHandle or worktreeId/worktreePath is required' });
+      return;
+    }
+
+    let selector = '';
+    let resolvedWp = null;
+    if (cleanWtPath) {
+      if (cleanWtPath.includes('\0') || cleanWtPath.startsWith('-')) {
+        sendJson(res, 400, { ok: false, error: 'Invalid worktreePath' });
+        return;
+      }
+      resolvedWp = path.resolve(cleanWtPath);
+      if (!getKnownWorktreePaths().has(resolvedWp)) {
+        sendJson(res, 400, { ok: false, error: 'Unknown or invalid worktreePath' });
+        return;
+      }
+      selector = `path:${resolvedWp}`;
+    } else {
+      if (cleanWtId.includes('\0') || cleanWtId.startsWith('-') || cleanWtId.length > 512) {
+        sendJson(res, 400, { ok: false, error: 'Invalid worktreeId' });
+        return;
+      }
+      const rec = findKnownWorktreeRecord(cleanWtId);
+      if (rec?.workspaceKind === 'folder-workspace') {
+        sendJson(res, 400, { ok: false, error: 'Folder workspaces cannot be activated from the CLI' });
+        return;
+      }
+      if (orcaStatus.available && !getKnownWorktreeIds().has(cleanWtId)) {
+        sendJson(res, 400, { ok: false, error: 'Unknown worktreeId' });
+        return;
+      }
+      selector = cleanWtId.startsWith('wt2:') ? `identity:${cleanWtId}` : `id:${cleanWtId}`;
+    }
+
+    const rpcRes = await execJson(
+      orcaBin,
+      ['worktree', 'activate', '--worktree', selector, '--json'],
+      { timeout: 10000 }
+    );
+    if (!rpcRes || rpcRes.ok === false) {
+      sendJson(res, 502, {
+        ok: false,
+        error: redactSensitiveText(rpcRes?.error?.message || 'Failed to activate workspace in Orca')
+      });
+      return;
+    }
+
+    sendJson(res, 200, {
+      ok: true,
+      method: 'worktree.activate',
+      worktreeId: cleanWtId || null,
+      worktreePath: resolvedWp,
+      focused: true,
+      result: unwrapOrcaResult(rpcRes)
+    });
+    return;
+  }
+
+  // GET /api/sessions?workspaceId=<id>&limit=<n>&q=<query>
+  if (req.method === 'GET' && pathname === '/api/sessions') {
+    const rawWorkspaceId = parsedUrl.searchParams.get('workspaceId');
+    const rawLimit = parsedUrl.searchParams.get('limit');
+    const rawQ = parsedUrl.searchParams.get('q');
+
+    let workspaceId = null;
+    if (rawWorkspaceId !== null && rawWorkspaceId.trim() !== '') {
+      const clean = rawWorkspaceId.trim();
+      if (clean.includes('\0') || clean.startsWith('-') || clean.length > 512) {
+        sendJson(res, 400, { ok: false, error: 'Invalid workspaceId' });
+        return;
+      }
+      workspaceId = clean;
+    }
+
+    let limit = 25;
+    if (rawLimit !== null && rawLimit.trim() !== '') {
+      if (!/^\d+$/.test(rawLimit.trim())) {
+        sendJson(res, 400, { ok: false, error: 'Invalid limit: must be an integer between 1 and 100' });
+        return;
+      }
+      const n = parseInt(rawLimit.trim(), 10);
+      if (!Number.isInteger(n) || n < 1 || n > 100) {
+        sendJson(res, 400, { ok: false, error: 'Invalid limit: must be an integer between 1 and 100' });
+        return;
+      }
+      limit = n;
+    }
+
+    let query = null;
+    if (rawQ !== null && rawQ.trim() !== '') {
+      const cleanQ = rawQ.trim();
+      if (cleanQ.includes('\0') || cleanQ.startsWith('-') || cleanQ.length > 200) {
+        sendJson(res, 400, { ok: false, error: 'Invalid query parameter' });
+        return;
+      }
+      query = cleanQ;
+    }
+
+    const ipcRes = await callWorkerIpc('/ipc/sessions/list', {
+      ...(workspaceId ? { workspaceId } : {}),
+      limit
+    }, 5000);
+
+    if (ipcRes.ok && Array.isArray(ipcRes.data?.sessions)) {
+      let sessions = ipcRes.data.sessions.map(s => ({
+        sessionId: String(s.sessionId || ''),
+        agent: String(s.agent || ''),
+        title: redactSensitiveText(String(s.title || '')),
+        workspaceId: s.workspaceId || null,
+        hostId: s.hostId || 'local',
+        branch: s.branch ? redactSensitiveText(String(s.branch)) : null,
+        createdAt: s.createdAt ?? null,
+        updatedAt: s.updatedAt ?? null,
+        messageCount: Number(s.messageCount || 0),
+        totalTokens: Number(s.totalTokens || 0),
+        running: Boolean(s.running),
+        resumable: Boolean(s.sessionId && (s.workspaceId || workspaceId))
+      }));
+      if (query) {
+        const lowerQ = query.toLowerCase();
+        sessions = sessions.filter(s =>
+          `${s.title} ${s.agent} ${s.branch || ''} ${s.sessionId}`.toLowerCase().includes(lowerQ)
+        );
+      }
+      sendJson(res, 200, {
+        ok: true,
+        available: true,
+        source: 'worker_ipc',
+        sessions,
+        truncated: Boolean(ipcRes.data.truncated)
+      });
+      return;
+    }
+
+    if (query) {
+      const searchRes = await execJson(
+        orcaBin,
+        ['search', `--query=${query}`, '--sort', 'newest', '--limit', String(limit), '--json'],
+        { timeout: 8000 }
+      );
+      if (searchRes && searchRes.ok !== false) {
+        const data = unwrapOrcaResult(searchRes);
+        const hits = Array.isArray(data?.hits) ? data.hits : [];
+        const sessions = hits.map(h => {
+          const structSid = h?.structuredSession?.sessionId || null;
+          const structWid = h?.structuredSession?.workspaceId || null;
+          const parsedUpdated = h?.updatedAt ? (Date.parse(h.updatedAt) || h.updatedAt) : null;
+          return {
+            sessionId: String(structSid || h?.sessionId || ''),
+            rawSessionId: h?.sessionId || null,
+            agent: String(h?.agent || ''),
+            title: redactSensitiveText(String(h?.title || '')),
+            workspaceId: structWid || null,
+            hostId: 'local',
+            branch: h?.branch ? redactSensitiveText(String(h.branch)) : null,
+            createdAt: null,
+            updatedAt: parsedUpdated,
+            messageCount: Number(h?.messageCount || 0),
+            totalTokens: 0,
+            running: false,
+            resumable: Boolean((structSid || h?.sessionId) && structWid && !ipcRes.unavailable)
+          };
+        });
+        sendJson(res, 200, {
+          ok: true,
+          available: true,
+          source: 'orca_search',
+          sessions,
+          truncated: Boolean(data?.page?.hasMore)
+        });
+        return;
+      }
+    }
+
+    sendJson(res, 200, {
+      ok: true,
+      available: false,
+      source: 'unavailable',
+      reason: ipcRes.code || 'worker_ipc_unavailable',
+      sessions: [],
+      truncated: false
+    });
+    return;
+  }
+
+  // POST /api/sessions/resume
+  if (req.method === 'POST' && pathname === '/api/sessions/resume') {
+    const bodyRes = await readJsonBody(req, res);
+    if (!bodyRes.ok) return;
+
+    const { workspaceId, agent, sessionId } = bodyRes.data;
+    const cleanWorkspaceId = typeof workspaceId === 'string' ? workspaceId.trim() : '';
+    const cleanAgent = typeof agent === 'string' ? agent.trim() : '';
+    const cleanSessionId = typeof sessionId === 'string' ? sessionId.trim() : '';
+
+    if (!cleanWorkspaceId || cleanWorkspaceId.includes('\0') || cleanWorkspaceId.startsWith('-') || cleanWorkspaceId.length > 512) {
+      sendJson(res, 400, { ok: false, error: 'Valid workspaceId is required' });
+      return;
+    }
+    if (!cleanAgent || !/^[a-z0-9][a-z0-9._-]{0,63}$/i.test(cleanAgent)) {
+      sendJson(res, 400, { ok: false, error: 'Invalid agent' });
+      return;
+    }
+    if (!cleanSessionId || !/^[a-z0-9][a-z0-9._:-]{0,255}$/i.test(cleanSessionId)) {
+      sendJson(res, 400, { ok: false, error: 'Invalid sessionId' });
+      return;
+    }
+
+    const ipcRes = await callWorkerIpc('/ipc/sessions/resume', {
+      workspaceId: cleanWorkspaceId,
+      agent: cleanAgent,
+      sessionId: cleanSessionId
+    }, 15000);
+
+    if (!ipcRes.ok) {
+      if (ipcRes.unavailable) {
+        sendJson(res, 503, {
+          ok: false,
+          code: ipcRes.code || 'worker_ipc_unavailable',
+          error: 'Orca worker IPC unavailable; enable or open the plugin in Orca to resume sessions'
+        });
+        return;
+      }
+      const status = (ipcRes.statusCode === 400 || ipcRes.statusCode === 501) ? ipcRes.statusCode : 502;
+      sendJson(res, status, {
+        ok: false,
+        code: ipcRes.code || 'resume_failed',
+        error: ipcRes.error || 'Failed to resume session'
+      });
+      return;
+    }
+
+    triggerImmediatePoll({ minGapMs: 0 });
+    sendJson(res, 200, {
+      ok: true,
+      workspaceId: cleanWorkspaceId,
+      agent: cleanAgent,
+      sessionId: cleanSessionId,
+      terminalId: ipcRes.data?.terminalId || null,
+      started: Boolean(ipcRes.data?.started)
+    });
+    return;
+  }
+
   // GET /api/snapshot or /api/health
   if (req.method === 'GET' && (pathname === '/api/snapshot' || pathname === '/api/state')) {
     res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -2798,7 +3395,11 @@ async function handleRequest(req, res) {
       port: activePort,
       uptime: process.uptime(),
       orca: orcaStatus,
-      sseClients: activeClients.size
+      sseClients: activeClients.size,
+      pollIntervalMs: getPollIntervalMs(),
+      pollMode: activeClients.size > 0 ? 'active' : 'idle',
+      workerIpcAvailable: Boolean(readWorkerIpcConfig()),
+      hostApiTarget: '1.7-1.9'
     }));
     return;
   }
@@ -2971,13 +3572,27 @@ export function startServer(port = PORT, host = HOST) {
   // Start background workers
   initTailer();
 
-  // Poll Orca immediately, then every 1.5s
-  pollOrca();
-  const orcaTimer = setInterval(pollOrca, 1500);
+  // Poll Orca immediately, then adaptive interval (1.5s active SSE, 15s idle)
+  pollLoopStarted = true;
+  pollStopped = false;
+  pollOrca().finally(() => scheduleNextPoll());
 
   function shutdown() {
     console.log('\n[swarm-server] Shutting down bridge gracefully...');
-    clearInterval(orcaTimer);
+    pollStopped = true;
+    pollLoopStarted = false;
+    if (pollTimer) {
+      clearTimeout(pollTimer);
+      pollTimer = null;
+    }
+    if (immediatePollTimer) {
+      clearTimeout(immediatePollTimer);
+      immediatePollTimer = null;
+    }
+    if (tailTimer) {
+      clearInterval(tailTimer);
+      tailTimer = null;
+    }
     for (const client of activeClients) {
       try {
         client.end();

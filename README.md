@@ -6,14 +6,15 @@ Built for multi-agent coding sessions where keeping Git worktrees tidy and avoid
 
 ## What it does
 
-- **Live Orca workspace polling**: Tracks active projects, Git worktrees, subagents, and live terminal sessions, automatically following the workspace focused in Orca.
+- **Live Orca workspace polling**: Tracks active projects, Git worktrees, subagents, and live terminal sessions, automatically following the workspace focused in Orca. Polls at `1.5s` when browser clients are connected, backs off to `15s` when idle, and refreshes right away on Orca workspace or agent status events.
+- **Outcome badges and session resume**: Displays agent run outcomes (`completed`, `failed`, `stopped`) and session IDs, lists recent past sessions (`GET /api/sessions` via local worker IPC with `orca search` keyword fallback), and resumes stopped sessions in one click (`POST /api/sessions/resume`).
 - **Cross-worktree file collision map**: Inspects modified files per worktree, highlights overlapping edits across branches, and lets you send review prompts or launch a hand-off check.
-- **Direct terminal steering and hand-offs**: Send prompts straight to live agent terminals or start a follow-up agent in the same worktree or a new sibling worktree.
+- **Direct terminal steering, focus, and hand-offs**: Send prompts straight to live agent terminals, jump to a terminal or workspace in Orca with single-click focus (`POST /api/terminal/focus`), or start a follow-up agent in the same worktree or a new sibling worktree.
 - **Live model and quota discovery**: Discovers locally installed CLI models across Claude, Codex, OpenCode, and Gemini alongside Orca provider quota status through a searchable dropdown picker.
 - **Live mention dispatch**: Tag agents with `@handle` or group tags in the composer to route prompts to live terminals or launch bound worktree agents.
 - **Sidepanel-friendly Simple and Dev modes**: Switch between plain-English labels (`Simple`) and technical Git/CLI terminology (`Dev`) inside the settings menu while keeping the same controls.
 - **Dynamic agent profile discovery**: Scans `~/.claude/agents`, `~/.config/opencode/agent`, `~/.codex/agents`, `~/.agents/agents`, project agent folders, and `~/.orca-swarm/presets.json`.
-- **Standalone HTTP and SSE bridge**: Zero-dependency Node.js server on port `4319` (`GET /api/snapshot`, `GET /api/models`, `POST /events`, `POST /api/dispatch-mentions`, `POST /api/handoff`, `POST /api/terminal/send`), with offline demo mode when Orca is not running.
+- **Standalone HTTP and SSE bridge**: Zero-dependency Node.js server on port `4319` (`GET /api/snapshot`, `GET /api/models`, `GET /api/sessions`, `POST /events`, `POST /api/dispatch-mentions`, `POST /api/handoff`, `POST /api/terminal/send`, `POST /api/terminal/focus`, `POST /api/sessions/resume`), with offline demo mode when Orca is not running.
 
 ## Quick start
 
@@ -23,7 +24,7 @@ Built for multi-agent coding sessions where keeping Git worktrees tidy and avoid
 orca plugin install nikolasgannon/orca-swarm-visualiser
 ```
 
-Orca prints an explicit `--approve <fingerprint>` command on first install. Re-run with that flag to grant `agent:read` access, then run the `Swarm: Open Swarm Visualiser` command in Orca (`Cmd+Shift+P` on macOS, `Ctrl+Shift+P` on Windows/Linux).
+Orca prints an explicit `--approve <fingerprint>` command on first install. Re-run with that flag to grant `agent:read`, `workspace:read`, `history:read`, and `agent:launch` access (Orca `1.4.259+`), then run the `Swarm: Open Swarm Visualiser` command in Orca (`Cmd+Shift+P` on macOS, `Ctrl+Shift+P` on Windows/Linux).
 
 ### 2. Local development in Orca
 
@@ -95,9 +96,9 @@ curl -X POST http://127.0.0.1:4319/events \
 
 ## Project structure
 
-- `orca-plugin.json`: Orca v2 plugin manifest (`trusted-worker`).
+- `orca-plugin.json`: Orca v2 plugin manifest (`0.2.0`, `trusted-worker`, `engines.orca >=1.4.259`).
 - `tsconfig.json`: TypeScript configuration for Orca plugin typings.
-- `src/worker.ts`: Orca plugin worker (bridge launcher and command registration).
+- `src/worker.ts`: Orca plugin worker (bridge launcher, command registration, event forwarding, and loopback session IPC).
 - `bridge/server.mjs`: Zero-dependency HTTP/SSE bridge, Orca poller, and CLI discovery server.
 - `bridge/public/index.html`: Single-file canvas UI with Simple/Dev language modes and demo mode.
 - `hooks/swarm-hook.mjs`: CLI tool hook for external agent logging.

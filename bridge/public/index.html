@@ -311,10 +311,44 @@
     .member-item:hover { background: var(--hover); }
     .member-item.retired { opacity: 0.65; }
     .member-top { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
-    .member-role { color: var(--muted); font-size: 12px; margin-left: 6px; }
-    .member-meta { font-family: var(--mono); font-size: 11px; color: var(--dim); white-space: nowrap; }
-    .member-desc { font-size: 12px; color: var(--muted); margin-top: 2px; line-height: 1.4; }
+    .member-title-wrap { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; min-width: 0; }
+    .member-role { color: var(--muted); font-size: 12px; }
+    .member-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; justify-content: flex-end; min-width: 0; }
+    .member-meta { font-family: var(--mono); font-size: 11px; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+    .member-desc { font-size: 12px; color: var(--muted); margin-top: 2px; line-height: 1.4; word-break: break-word; }
     .section-toggle { margin-top: 12px; padding: 6px; font-size: 11px; font-weight: 600; letter-spacing: 0.05em; color: var(--muted); text-transform: uppercase; background: transparent; border: 0; cursor: pointer; display: flex; align-items: center; gap: 6px; }
+    .outcome-badge {
+      display: inline-flex; align-items: center; gap: 4px; padding: 1px 7px; border-radius: 999px;
+      font-size: 10.5px; font-weight: 600; white-space: nowrap; background: var(--surface-2); color: var(--muted);
+    }
+    .outcome-badge[hidden], .mini-btn[hidden], .sessions-note[hidden] { display: none; }
+    .outcome-badge.success { background: var(--live-soft); color: var(--live); }
+    .outcome-badge.failed { background: var(--danger-soft); color: var(--danger); }
+    .outcome-badge.stopped { background: var(--amber-soft); color: var(--amber); }
+    .outcome-badge.neutral { background: var(--surface-2); color: var(--muted); }
+    .sessions-section { margin-top: 14px; padding-top: 10px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 8px; }
+    .sessions-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+    .sessions-head .section-toggle { margin-top: 0; padding: 4px 2px; }
+    .sessions-head-actions { display: flex; align-items: center; gap: 6px; }
+    .sessions-controls { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+    .sessions-search {
+      flex: 1 1 160px; min-width: 120px; display: flex; align-items: center; gap: 6px;
+      background: var(--surface-2); border: 1px solid transparent; border-radius: 7px; padding: 5px 9px;
+    }
+    .sessions-search:focus-within { border-color: var(--border-strong); background: var(--bg); }
+    .sessions-search input { border: 0; background: transparent; color: var(--text); outline: none; width: 100%; font-size: 12px; }
+    .sessions-note { font-size: 11.5px; color: var(--muted); line-height: 1.45; padding: 4px 2px; }
+    .session-list { display: flex; flex-direction: column; gap: 6px; }
+    .session-card {
+      border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; background: var(--surface);
+      display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    }
+    .session-card:hover { border-color: var(--border-strong); }
+    .session-main { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 3px; }
+    .session-top { display: flex; align-items: center; gap: 6px; min-width: 0; flex-wrap: wrap; }
+    .session-title { font-size: 12px; font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+    .session-meta { font-family: var(--mono); font-size: 10.5px; color: var(--muted); display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+    .session-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
 
     /* Timeline */
     .timeline-header { padding: 10px 16px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; font-size: 12px; color: var(--muted); }
@@ -563,6 +597,8 @@
     }
     .state-pill.active { background: var(--live-soft); color: var(--live); }
     .state-pill.blocked { background: var(--danger-soft); color: var(--danger); }
+    .state-pill.done { background: var(--surface-2); color: var(--text-2); }
+    .drawer-title-badges { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
     .status-banner {
       border-radius: 8px; padding: 8px 10px; font-size: 12px; line-height: 1.45; display: none; word-break: break-word;
     }
@@ -630,6 +666,8 @@
       .modal { max-height: 92vh; overflow-y: auto; }
       .act-toolbar { flex-wrap: wrap; }
       .post-top, .member-top, .spc-head { flex-wrap: wrap; gap: 6px; }
+      .member-actions { justify-content: flex-start; }
+      .session-card { flex-wrap: wrap; }
       .wt-card-head { gap: 8px; }
     }
   </style>
@@ -766,7 +804,11 @@
           <input id="memberSearch" placeholder="Search members" />
         </div>
       </div>
-      <div id="membersList" class="members-scroll"></div>
+      <div id="membersBanner" class="status-banner" style="margin:0 16px 8px;"></div>
+      <div id="membersScroll" class="members-scroll">
+        <div id="membersList"></div>
+        <div id="sessionsSection" class="sessions-section"></div>
+      </div>
     </section>
 
     <!-- GRAPH -->
@@ -952,9 +994,16 @@
         <div class="drawer-section">
           <div class="drawer-section-title">
             <span id="steerTargetDetailsTitle">Target Details</span>
-            <span id="steerLiveState" class="state-pill">waiting</span>
+            <span class="drawer-title-badges">
+              <span id="steerOutcomeBadge" class="outcome-badge" hidden></span>
+              <span id="steerLiveState" class="state-pill">waiting</span>
+            </span>
           </div>
           <div id="steerTargetGrid" class="target-grid"></div>
+          <div class="drawer-foot-row">
+            <span id="steerFocusHint" class="muted-note">Bring this terminal or workspace to the front in Orca.</span>
+            <button type="button" id="steerFocusBtn" class="mini-btn accent">Focus in Orca</button>
+          </div>
         </div>
 
         <form id="steerTerminalForm" class="drawer-section">
@@ -1107,6 +1156,54 @@ function formatStateLabel(state) {
   if (s === 'blocked' || s === 'error') return 'Stuck';
   if (s === 'retired' || s === 'done') return 'Done';
   return state || 'Ready';
+}
+
+function shortId(val, maxLen = 10) {
+  const s = String(val || '').trim();
+  if (!s) return '';
+  return s.length > maxLen ? `${s.slice(0, maxLen)}…` : s;
+}
+
+function getMemberOutcome(m) {
+  const raw = m?.mainAgent?.outcome ?? m?.outcome ?? '';
+  return typeof raw === 'string' ? raw.trim() : '';
+}
+
+function classifyOutcome(outcome) {
+  const s = String(outcome || '').trim().toLowerCase();
+  if (!s) return null;
+  if (['completed', 'complete', 'done', 'success', 'succeeded', 'ok', 'passed'].includes(s)) {
+    return { kind: 'success', simple: 'Completed', dev: s };
+  }
+  if (['failed', 'fail', 'error', 'errored', 'crashed', 'timeout', 'timed_out'].includes(s)) {
+    return { kind: 'failed', simple: 'Failed', dev: s };
+  }
+  if (['stopped', 'cancelled', 'canceled', 'aborted', 'interrupted', 'killed'].includes(s)) {
+    return { kind: 'stopped', simple: 'Stopped', dev: s };
+  }
+  return { kind: 'neutral', simple: outcome, dev: s };
+}
+
+function renderOutcomeBadgeHtml(outcome) {
+  const info = classifyOutcome(outcome);
+  if (!info) return '';
+  const label = isSimpleUi() ? info.simple : info.dev;
+  const tip = tUi(`Last run: ${info.simple}`, `mainAgent.outcome: ${outcome}`);
+  return `<span class="outcome-badge ${escHtml(info.kind)}" title="${escHtml(tip)}">${escHtml(label)}</span>`;
+}
+
+function formatRelativeTime(ts) {
+  if (!ts) return '';
+  const ms = typeof ts === 'number' ? ts : Date.parse(ts);
+  if (!Number.isFinite(ms)) return '';
+  const diffSec = Math.max(0, Math.round((Date.now() - ms) / 1000));
+  if (diffSec < 60) return isSimpleUi() ? 'just now' : `${diffSec}s ago`;
+  const mins = Math.floor(diffSec / 60);
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  const days = Math.floor(hrs / 24);
+  return `${days}d ago`;
 }
 
 function formatToolLabel(tool) {
@@ -1288,7 +1385,11 @@ function describeNodePlainEnglish(m, snap) {
     ? `${tUi('Last message', 'Last posted')} #${last.num} (${last.time}) ${tUi('to', 'to')} ${last.to.join(', ')}: "${last.text.slice(0, 95)}${last.text.length > 95 ? '…' : ''}"`
     : `${tUi('Waiting for its first job. Job', 'Waiting for its first assignment. Role')}: ${m.scope}.`;
   const { filesCount, collisionCount } = getMemberFileStats(m);
+  const outcome = getMemberOutcome(m);
+  const outcomeInfo = st !== 'active' ? classifyOutcome(outcome) : null;
   const extra = [];
+  if (outcomeInfo) extra.push(`${tUi('Last run', 'Outcome')}: ${isSimpleUi() ? outcomeInfo.simple : outcomeInfo.dev}`);
+  if (m.sessionId) extra.push(`${tUi('Chat', 'Session')}: ${shortId(m.sessionId, 12)}`);
   if (m.branch) extra.push(`${tUi('Folder copy', 'Branch')}: ${m.branch}`);
   if (m.terminalHandle) extra.push(`${tUi('Open window', 'Terminal')}: ${m.terminalHandle}`);
   if (filesCount > 0) {
@@ -1757,23 +1858,98 @@ function renderBoard() {
   });
 }
 
+function setMembersBanner(kind, message) {
+  const el = document.getElementById('membersBanner');
+  if (!el) return;
+  if (!message) {
+    el.className = 'status-banner';
+    el.textContent = '';
+    return;
+  }
+  el.className = `status-banner show ${kind === 'err' ? 'err' : 'ok'}`;
+  el.textContent = message;
+}
+
+async function focusTargetInOrca(target, btnEl, statusFn) {
+  const terminalHandle = String(target?.terminalHandle || '').trim();
+  const worktreeId = String(target?.worktreeId || '').trim();
+  const worktreePath = String(target?.worktreePath || '').trim();
+  if (!terminalHandle && !worktreeId && !worktreePath) {
+    statusFn?.('err', tUi('No open window or folder is linked here.', 'No terminalHandle or worktree target is available to focus.'));
+    return;
+  }
+  const origLabel = btnEl ? btnEl.textContent : '';
+  if (btnEl) {
+    btnEl.disabled = true;
+    btnEl.textContent = tUi('Showing...', 'Focusing...');
+  }
+  try {
+    const body = terminalHandle
+      ? { terminalHandle }
+      : (worktreePath ? { worktreePath, worktreeId } : { worktreeId });
+    let res = await fetch('/api/terminal/focus', {
+      method: 'POST',
+      headers: bridgeJsonHeaders(),
+      body: JSON.stringify(body)
+    });
+    let data = await res.json().catch(() => ({}));
+    if ((!res.ok || data.ok === false) && res.status === 400 && terminalHandle && (worktreePath || worktreeId)) {
+      res = await fetch('/api/terminal/focus', {
+        method: 'POST',
+        headers: bridgeJsonHeaders(),
+        body: JSON.stringify(worktreePath ? { worktreePath, worktreeId } : { worktreeId })
+      });
+      data = await res.json().catch(() => ({}));
+    }
+    if (!res.ok || data.ok === false) {
+      statusFn?.('err', data.error || tUi(`Could not open in Orca (HTTP ${res.status}).`, `Focus failed (HTTP ${res.status}).`));
+    } else {
+      const msg = data.method === 'terminal.switch'
+        ? tUi(`Switched to window ${data.terminalHandle || terminalHandle} in Orca.`, `Focused terminal ${data.terminalHandle || terminalHandle} in Orca.`)
+        : tUi('Brought workspace to the front in Orca.', 'Activated workspace in Orca.');
+      statusFn?.('ok', msg);
+    }
+  } catch (err) {
+    statusFn?.('err', tUi(`Connection error: ${err?.message || 'network error'}`, `Network error focusing target: ${err?.message || 'network error'}`));
+  } finally {
+    if (btnEl) {
+      btnEl.disabled = !(terminalHandle || worktreeId || worktreePath);
+      btnEl.textContent = origLabel;
+    }
+  }
+}
+
 function renderMembers() {
   const q = document.getElementById('memberSearch').value.toLowerCase(), snap = computeSnapshot(cursor);
-  const filtered = snap.visibleMembers.filter(m => !q || m.id.toLowerCase().includes(q) || m.role.toLowerCase().includes(q));
+  const filtered = snap.visibleMembers.filter(m =>
+    !q ||
+    m.id.toLowerCase().includes(q) ||
+    m.role.toLowerCase().includes(q) ||
+    (m.sessionId && m.sessionId.toLowerCase().includes(q)) ||
+    getMemberOutcome(m).toLowerCase().includes(q)
+  );
   const active = filtered.filter(m => snap.stateMap.get(m.id) !== 'retired'), retired = filtered.filter(m => snap.stateMap.get(m.id) === 'retired');
   const btnLbl = tUi('Message / Pass', 'Steer / Hand Off');
+  const focusLbl = tUi('Show', 'Focus');
   const rowHtml = (m, isRet) => {
     const last = snap.lastPostMap.get(m.id);
     const rawState = snap.stateMap.get(m.id) || m.liveState || 'waiting';
     const stateLabel = formatStateLabel(rawState);
-    const stateCls = rawState === 'active' ? 'active' : (rawState === 'blocked' ? 'blocked' : '');
+    const stateCls = rawState === 'active' ? 'active' : (rawState === 'blocked' ? 'blocked' : (rawState === 'done' ? 'done' : ''));
+    const outcome = getMemberOutcome(m);
+    const outcomeHtml = (outcome && rawState !== 'active') ? renderOutcomeBadgeHtml(outcome) : '';
     const { filesCount, collisionCount } = getMemberFileStats(m);
     const metaParts = [m.model];
     if (m.branch) metaParts.push(m.branch);
+    if (m.sessionId) metaParts.push(isSimpleUi() ? `chat ${shortId(m.sessionId, 8)}` : `sess:${shortId(m.sessionId, 10)}`);
     if (filesCount > 0) metaParts.push(isSimpleUi() ? `${filesCount} edited` : `${filesCount} file${filesCount === 1 ? '' : 's'}`);
     if (collisionCount > 0) metaParts.push(isSimpleUi() ? `${collisionCount} clash${collisionCount === 1 ? '' : 'es'}` : `${collisionCount} collision${collisionCount === 1 ? '' : 's'}`);
     if (last) metaParts.push(`#${last.num}`);
-    return `<div class="member-item ${isRet ? 'retired' : ''}">${avatarHtml(m)}<div style="flex:1; min-width:0;"><div class="member-top"><div><strong>${escHtml(m.id)}</strong><span class="member-role">${escHtml(m.role)}</span> <span class="state-pill ${stateCls}" style="margin-left:4px;">${escHtml(stateLabel)}</span></div><div style="display:flex; align-items:center; gap:8px;"><div class="member-meta">${escHtml(metaParts.join(' · '))}</div><button type="button" class="mini-btn steer-member-btn" data-member="${escHtml(m.id)}">${escHtml(btnLbl)}</button></div></div><div class="member-desc">${escHtml(last ? last.text : m.scope)}</div></div></div>`;
+    const canFocus = Boolean(m.terminalHandle || m.worktreePath || m.worktreeId);
+    const focusBtnHtml = canFocus
+      ? `<button type="button" class="mini-btn focus-member-btn" data-member="${escHtml(m.id)}" title="${escHtml(tUi('Bring this window or folder to the front in Orca', 'Focus terminal or workspace in Orca'))}">${escHtml(focusLbl)}</button>`
+      : '';
+    return `<div class="member-item ${isRet ? 'retired' : ''}">${avatarHtml(m)}<div style="flex:1; min-width:0;"><div class="member-top"><div class="member-title-wrap"><strong>${escHtml(m.id)}</strong><span class="member-role">${escHtml(m.role)}</span><span class="state-pill ${stateCls}">${escHtml(stateLabel)}</span>${outcomeHtml}</div><div class="member-actions"><div class="member-meta">${escHtml(metaParts.join(' · '))}</div>${focusBtnHtml}<button type="button" class="mini-btn steer-member-btn" data-member="${escHtml(m.id)}">${escHtml(btnLbl)}</button></div></div><div class="member-desc">${escHtml(last ? last.text : m.scope)}</div></div></div>`;
   };
   const listEl = document.getElementById('membersList');
   const retHeading = tUi(`Finished ${retired.length}`, `Retired ${retired.length}`);
@@ -1781,6 +1957,12 @@ function renderMembers() {
   const rt = document.getElementById('retToggle'); if (rt) rt.onclick = () => { retiredExpanded = !retiredExpanded; renderMembers(); };
   listEl.querySelectorAll('.steer-member-btn').forEach(btn => {
     btn.onclick = () => openSteerDrawerForMember(btn.dataset.member);
+  });
+  listEl.querySelectorAll('.focus-member-btn').forEach(btn => {
+    btn.onclick = () => {
+      const m = members.find(x => x.id === btn.dataset.member);
+      if (m) focusTargetInOrca(m, btn, setMembersBanner);
+    };
   });
 }
 
@@ -1971,6 +2153,10 @@ function switchTab(name) {
   if (viewEl) viewEl.classList.add('active');
   if (name === 'graph') setTimeout(resizeGraph, 10);
   if (name === 'timeline') renderTimeline();
+  if (name === 'members') {
+    renderSessionsSection();
+    loadRecentSessions();
+  }
   if (name === 'files') {
     renderFiles();
     refreshFilesForActiveProject();
@@ -3392,6 +3578,8 @@ let latestOrcaStatus = { available: false };
 let followActiveOrca = !new URLSearchParams(location.search).has('project');
 let activeOrcaProjectId = null;
 let activeOrcaWorktreeId = null;
+let activeWorkspaceListId = null;
+let activeOrcaWorkspaceId = null;
 let activeWorktreePath = null;
 let activeBranch = null;
 
@@ -3821,6 +4009,8 @@ function openSteerDrawerForMember(memberId) {
   const { byId, byPath } = getWorktreeMetadataMap();
   const wtMeta = (m.worktreeId && byId.get(m.worktreeId)) || (m.worktreePath && byPath.get(m.worktreePath)) || {};
   const worktreeId = m.worktreeId || wtMeta.worktreeId || '';
+  const workspaceId = m.workspaceId || wtMeta.workspaceId || '';
+  const workspaceListId = m.workspaceListId || wtMeta.workspaceListId || '';
   const worktreePath = m.worktreePath || wtMeta.worktreePath || '';
   const branch = (m.branch || wtMeta.branch || '').replace(/^refs\/heads\//, '');
   const repoId = m.repoId || wtMeta.repoId || getActiveBucket()?.rawId || '';
@@ -3833,6 +4023,10 @@ function openSteerDrawerForMember(memberId) {
     memberId: m.id,
     role: m.role || 'Agent',
     liveState,
+    outcome: getMemberOutcome(m),
+    sessionId: m.sessionId || '',
+    workspaceId,
+    workspaceListId,
     branch,
     worktreeId,
     worktreePath,
@@ -3862,6 +4056,10 @@ function openSteerDrawerForWorktree(group, preferVerifier = true) {
     memberId: primaryMember.id,
     role: primaryMember.role || 'Worktree',
     liveState: snap.stateMap.get(primaryMember.id) || primaryMember.liveState || 'waiting',
+    outcome: getMemberOutcome(primaryMember),
+    sessionId: primaryMember.sessionId || '',
+    workspaceId: primaryMember.workspaceId || '',
+    workspaceListId: primaryMember.workspaceListId || '',
     branch: group.branch,
     worktreeId: group.worktreeId,
     worktreePath: group.worktreePath,
@@ -3883,8 +4081,23 @@ function refreshOpenSteerDrawerCopy(ctx) {
 
   const stateEl = document.getElementById('steerLiveState');
   if (stateEl) {
-    stateEl.textContent = formatStateLabel(ctx.liveState || 'waiting');
-    stateEl.className = `state-pill ${ctx.liveState === 'active' ? 'active' : (ctx.liveState === 'blocked' ? 'blocked' : '')}`;
+    const st = ctx.liveState || 'waiting';
+    stateEl.textContent = formatStateLabel(st);
+    stateEl.className = `state-pill ${st === 'active' ? 'active' : (st === 'blocked' ? 'blocked' : (st === 'done' ? 'done' : ''))}`;
+  }
+
+  const outcomeBadgeEl = document.getElementById('steerOutcomeBadge');
+  if (outcomeBadgeEl) {
+    const info = (ctx.outcome && ctx.liveState !== 'active') ? classifyOutcome(ctx.outcome) : null;
+    if (info) {
+      outcomeBadgeEl.hidden = false;
+      outcomeBadgeEl.className = `outcome-badge ${info.kind}`;
+      outcomeBadgeEl.textContent = isSimpleUi() ? info.simple : info.dev;
+      outcomeBadgeEl.title = tUi(`Last run: ${info.simple}`, `mainAgent.outcome: ${ctx.outcome}`);
+    } else {
+      outcomeBadgeEl.hidden = true;
+      outcomeBadgeEl.textContent = '';
+    }
   }
 
   const gridEl = document.getElementById('steerTargetGrid');
@@ -3893,10 +4106,24 @@ function refreshOpenSteerDrawerCopy(ctx) {
       { k: tUi('AI Name', 'Member'), v: ctx.memberId || '-' },
       { k: tUi('Version', 'Branch'), v: ctx.branch || '-' },
       { k: tUi('Live Window', 'Terminal Handle'), v: ctx.terminalHandle || tUi('Not connected', 'Unavailable') },
-      { k: tUi('Workspace ID', 'Worktree ID'), v: ctx.worktreeId || '-' },
+      { k: tUi('Chat ID', 'Session ID'), v: ctx.sessionId || '-' },
+      { k: tUi('Workspace ID', 'Worktree / Workspace'), v: ctx.workspaceId || ctx.worktreeId || '-' },
       { k: tUi('Workspace Folder', 'Worktree Path'), v: ctx.worktreePath || '-', full: true }
     ];
     gridEl.innerHTML = items.map(it => `<div class="target-kv${it.full ? ' full' : ''}"><div class="k">${escHtml(it.k)}</div><div class="v" title="${escHtml(it.v)}">${escHtml(it.v)}</div></div>`).join('');
+  }
+
+  const canFocus = Boolean(ctx.terminalHandle || ctx.worktreePath || ctx.worktreeId);
+  const focusBtn = document.getElementById('steerFocusBtn');
+  const focusHint = document.getElementById('steerFocusHint');
+  if (focusBtn) {
+    focusBtn.disabled = !canFocus;
+    focusBtn.textContent = tUi('Show in Orca', 'Focus in Orca');
+  }
+  if (focusHint) {
+    focusHint.textContent = canFocus
+      ? tUi('Brings this AI window or folder to the front in Orca.', 'Runs terminal switch or workspace activate in Orca.')
+      : tUi('No open window or folder is linked here.', 'No terminalHandle or worktree target attached.');
   }
 
   const hasTerm = Boolean(ctx.terminalHandle);
@@ -3969,6 +4196,11 @@ function closeSteerDrawer() {
 }
 
 document.getElementById('steerCloseBtn')?.addEventListener('click', closeSteerDrawer);
+document.getElementById('steerFocusBtn')?.addEventListener('click', () => {
+  if (currentSteerTarget) {
+    focusTargetInOrca(currentSteerTarget, document.getElementById('steerFocusBtn'), setSteerStatus);
+  }
+});
 document.getElementById('steerDrawerBackdrop')?.addEventListener('click', (e) => {
   if (e.target.id === 'steerDrawerBackdrop') closeSteerDrawer();
 });
@@ -4296,6 +4528,275 @@ function findMatchingOrcaProjectId() {
   return null;
 }
 
+// --- Past Sessions List & Resume (#1.4.259) ---
+const sessionsState = {
+  expanded: false,
+  loading: false,
+  available: true,
+  source: '',
+  reason: '',
+  query: '',
+  scopeAll: false,
+  sessions: [],
+  error: ''
+};
+let sessionsFetchTimer = null;
+
+function getScopedWorkspaceIdForSessions() {
+  if (sessionsState.scopeAll) return '';
+  if (!activeProjectId || !activeProjectId.startsWith('orca:')) return '';
+  if (activeOrcaWorkspaceId) {
+    const bucket = getActiveBucket();
+    const matchesBucket = (bucket?.members || []).some(m =>
+      m.workspaceId === activeOrcaWorkspaceId || m.worktreeId === activeOrcaWorktreeId
+    );
+    if (matchesBucket) return activeOrcaWorkspaceId;
+  }
+  return '';
+}
+
+function ensureSessionsSectionShell() {
+  const host = document.getElementById('sessionsSection');
+  if (!host || host.dataset.ready === '1') return host;
+  host.dataset.ready = '1';
+  host.innerHTML = `
+    <div class="sessions-head">
+      <button type="button" class="section-toggle" id="sessionsToggle" aria-expanded="false"></button>
+      <div class="sessions-head-actions">
+        <button type="button" class="mini-btn" id="sessionsScopeBtn" hidden></button>
+        <button type="button" class="mini-btn" id="sessionsRefreshBtn">Refresh</button>
+      </div>
+    </div>
+    <div id="sessionsBody" style="display:none; flex-direction:column; gap:8px;">
+      <div class="sessions-controls">
+        <div class="sessions-search">
+          <span style="color:var(--dim);">⌕</span>
+          <input id="sessionsSearch" placeholder="Search past sessions..." autocomplete="off" />
+        </div>
+      </div>
+      <div id="sessionsStatusNote" class="sessions-note" hidden></div>
+      <div id="sessionsList" class="session-list"></div>
+    </div>
+  `;
+
+  document.getElementById('sessionsToggle')?.addEventListener('click', () => {
+    sessionsState.expanded = !sessionsState.expanded;
+    if (sessionsState.expanded && !sessionsState.loading && !sessionsState.sessions.length && !sessionsState.error) {
+      loadRecentSessions();
+    }
+    renderSessionsSection();
+  });
+
+  document.getElementById('sessionsRefreshBtn')?.addEventListener('click', () => {
+    sessionsState.expanded = true;
+    loadRecentSessions();
+  });
+
+  document.getElementById('sessionsScopeBtn')?.addEventListener('click', () => {
+    sessionsState.scopeAll = !sessionsState.scopeAll;
+    sessionsState.expanded = true;
+    loadRecentSessions();
+  });
+
+  document.getElementById('sessionsSearch')?.addEventListener('input', (e) => {
+    sessionsState.query = e.target.value || '';
+    clearTimeout(sessionsFetchTimer);
+    sessionsFetchTimer = setTimeout(() => {
+      loadRecentSessions();
+    }, 260);
+  });
+
+  return host;
+}
+
+async function resumePastSession(session, btnEl) {
+  if (!session?.sessionId || !session?.workspaceId || !session?.agent) return;
+  const orig = btnEl ? btnEl.textContent : '';
+  if (btnEl) {
+    btnEl.disabled = true;
+    btnEl.textContent = tUi('Opening...', 'Resuming...');
+  }
+  setMembersBanner(null, '');
+  try {
+    const res = await fetch('/api/sessions/resume', {
+      method: 'POST',
+      headers: bridgeJsonHeaders(),
+      body: JSON.stringify({
+        workspaceId: session.workspaceId,
+        agent: session.agent,
+        sessionId: session.sessionId
+      })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || data.ok === false) {
+      setMembersBanner('err', data.error || tUi(`Could not reopen chat (HTTP ${res.status}).`, `Resume failed (HTTP ${res.status}).`));
+      return;
+    }
+    setMembersBanner('ok', tUi(
+      `Reopened ${session.agent} chat${data.terminalId ? ` in ${data.terminalId}` : ''}.`,
+      `Resumed ${session.agent} session ${shortId(session.sessionId, 12)}${data.terminalId ? ` (${data.terminalId})` : ''}.`
+    ));
+    await loadRecentSessions();
+  } catch (err) {
+    setMembersBanner('err', tUi(`Connection error: ${err?.message || 'network error'}`, `Network error resuming session: ${err?.message || 'network error'}`));
+  } finally {
+    if (btnEl) {
+      btnEl.disabled = false;
+      btnEl.textContent = orig;
+    }
+  }
+}
+
+function renderSessionsSection() {
+  const host = ensureSessionsSectionShell();
+  if (!host) return;
+
+  const toggleBtn = document.getElementById('sessionsToggle');
+  const scopeBtn = document.getElementById('sessionsScopeBtn');
+  const refreshBtn = document.getElementById('sessionsRefreshBtn');
+  const bodyEl = document.getElementById('sessionsBody');
+  const searchInp = document.getElementById('sessionsSearch');
+  const noteEl = document.getElementById('sessionsStatusNote');
+  const listEl = document.getElementById('sessionsList');
+
+  const count = sessionsState.sessions.length;
+  const baseTitle = tUi('Past Chats', 'Past Sessions');
+  if (toggleBtn) {
+    const countSuffix = count ? ` ${count}` : '';
+    toggleBtn.textContent = `${baseTitle}${countSuffix} ${sessionsState.expanded ? '▾' : '▸'}`;
+    toggleBtn.setAttribute('aria-expanded', String(sessionsState.expanded));
+  }
+  if (refreshBtn) {
+    refreshBtn.disabled = sessionsState.loading;
+    refreshBtn.textContent = sessionsState.loading ? tUi('Loading...', 'Loading...') : 'Refresh';
+  }
+  if (searchInp) {
+    searchInp.placeholder = tUi('Search past chats...', 'Search sessions (orca search)...');
+  }
+  if (scopeBtn) {
+    const hasScopedWs = Boolean(activeProjectId && activeProjectId.startsWith('orca:') && activeOrcaWorkspaceId);
+    scopeBtn.hidden = !sessionsState.expanded || !hasScopedWs;
+    scopeBtn.textContent = sessionsState.scopeAll
+      ? tUi('All folders', 'All workspaces')
+      : tUi('This folder', 'This workspace');
+    scopeBtn.title = tUi('Switch between the active folder and all folders', 'Toggle active workspace filter');
+  }
+  if (bodyEl) {
+    bodyEl.style.display = sessionsState.expanded ? 'flex' : 'none';
+  }
+  if (!sessionsState.expanded) return;
+
+  if (noteEl) {
+    if (sessionsState.error) {
+      noteEl.hidden = false;
+      noteEl.textContent = sessionsState.error;
+    } else if (!sessionsState.available && sessionsState.source === 'unavailable') {
+      noteEl.hidden = false;
+      noteEl.textContent = tUi(
+        'Recent chat history needs the Orca app plugin running. Type a keyword above to search.',
+        `Worker IPC offline (${sessionsState.reason || 'unavailable'}). Type a query above to search via orca search.`
+      );
+    } else if (sessionsState.source === 'orca_search') {
+      noteEl.hidden = false;
+      noteEl.textContent = tUi(
+        'Showing keyword matches. Reopening from here needs the Orca app plugin active.',
+        'Results from orca search fallback. Resuming requires Orca worker IPC.'
+      );
+    } else {
+      noteEl.hidden = true;
+      noteEl.textContent = '';
+    }
+  }
+
+  if (!listEl) return;
+  if (sessionsState.loading && !sessionsState.sessions.length) {
+    listEl.innerHTML = `<div class="sessions-note">${escHtml(tUi('Loading past chats...', 'Loading sessions...'))}</div>`;
+    return;
+  }
+
+  if (!sessionsState.sessions.length) {
+    if (sessionsState.available) {
+      listEl.innerHTML = `<div class="sessions-note">${escHtml(sessionsState.query.trim() ? tUi('No past chats matched that search.', 'No matching sessions found.') : tUi('No past chats recorded yet.', 'No recent sessions found.'))}</div>`;
+    } else {
+      listEl.innerHTML = '';
+    }
+    return;
+  }
+
+  listEl.innerHTML = sessionsState.sessions.map((s, idx) => {
+    const title = s.title || s.sessionId || tUi('Untitled chat', 'Untitled session');
+    const metaParts = [];
+    if (s.branch) metaParts.push(s.branch);
+    if (s.sessionId) metaParts.push(shortId(s.sessionId, 10));
+    if (s.messageCount) metaParts.push(isSimpleUi() ? `${s.messageCount} msg` : `${s.messageCount} msgs`);
+    const rel = formatRelativeTime(s.updatedAt || s.createdAt);
+    if (rel) metaParts.push(rel);
+    const statusPill = s.running
+      ? `<span class="state-pill active">${escHtml(tUi('Open now', 'Running'))}</span>`
+      : '';
+    const actionHtml = s.running
+      ? ''
+      : (s.resumable
+          ? `<button type="button" class="mini-btn accent resume-session-btn" data-idx="${idx}">${escHtml(tUi('Reopen', 'Resume'))}</button>`
+          : `<span class="muted-note">${escHtml(tUi('View only', 'Read-only'))}</span>`);
+
+    return `<div class="session-card">
+      <div class="session-main">
+        <div class="session-top">
+          <span class="session-title" title="${escHtml(title)}">${escHtml(title)}</span>
+          ${s.agent ? `<span class="code-chip">${escHtml(s.agent)}</span>` : ''}
+          ${statusPill}
+        </div>
+        <div class="session-meta">${escHtml(metaParts.join(' · '))}</div>
+      </div>
+      <div class="session-actions">${actionHtml}</div>
+    </div>`;
+  }).join('');
+
+  listEl.querySelectorAll('.resume-session-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const s = sessionsState.sessions[Number(btn.dataset.idx)];
+      if (s) resumePastSession(s, btn);
+    });
+  });
+}
+
+async function loadRecentSessions() {
+  ensureSessionsSectionShell();
+  sessionsState.loading = true;
+  sessionsState.error = '';
+  renderSessionsSection();
+
+  const params = new URLSearchParams();
+  params.set('limit', '20');
+  const wsId = getScopedWorkspaceIdForSessions();
+  if (wsId) params.set('workspaceId', wsId);
+  const q = sessionsState.query.trim();
+  if (q && !q.startsWith('-')) params.set('q', q);
+
+  try {
+    const res = await fetch(`/api/sessions?${params.toString()}`);
+    const data = await res.json().catch(() => null);
+    if (!res.ok || !data || data.ok === false) {
+      sessionsState.error = data?.error || tUi(`Could not load past chats (HTTP ${res.status}).`, `Failed to load sessions (HTTP ${res.status}).`);
+      sessionsState.sessions = [];
+      return;
+    }
+    sessionsState.available = Boolean(data.available);
+    sessionsState.source = data.source || '';
+    sessionsState.reason = data.reason || '';
+    sessionsState.sessions = Array.isArray(data.sessions) ? data.sessions : [];
+  } catch {
+    sessionsState.available = false;
+    sessionsState.source = 'unavailable';
+    sessionsState.reason = 'network_error';
+    sessionsState.sessions = [];
+  } finally {
+    sessionsState.loading = false;
+    renderSessionsSection();
+  }
+}
+
 function switchProject(pid, userInitiated = false) {
   if (userInitiated) {
     userPinnedProject = true;
@@ -4308,6 +4809,11 @@ function switchProject(pid, userInitiated = false) {
   else if (pid === '__webhook__') applyBucket(webhookBucket, true);
   else if (orcaBuckets.has(pid)) applyBucket(orcaBuckets.get(pid), true);
   rebuildProjectSelect();
+  if (document.getElementById('view-members')?.classList.contains('active')) {
+    loadRecentSessions();
+  } else {
+    renderSessionsSection();
+  }
 }
 
 if (projectSelectEl) {
@@ -4391,6 +4897,8 @@ function ingestOrcaProjects(projectsList) {
 function updateActiveOrcaFields(data) {
   if ('activeOrcaProjectId' in data) activeOrcaProjectId = data.activeOrcaProjectId || null;
   if ('activeOrcaWorktreeId' in data) activeOrcaWorktreeId = data.activeOrcaWorktreeId || null;
+  if ('activeWorkspaceListId' in data) activeWorkspaceListId = data.activeWorkspaceListId || null;
+  if ('activeOrcaWorkspaceId' in data) activeOrcaWorkspaceId = data.activeOrcaWorkspaceId || null;
   if ('activeWorktreePath' in data) activeWorktreePath = data.activeWorktreePath || null;
   if ('activeBranch' in data) activeBranch = data.activeBranch || null;
 }
@@ -4437,6 +4945,8 @@ function handleIncomingServerEvent(data, eventName) {
       renderCustomModelOptions();
       activeOrcaProjectId = null;
       activeOrcaWorktreeId = null;
+      activeWorkspaceListId = null;
+      activeOrcaWorkspaceId = null;
       activeWorktreePath = null;
       activeBranch = null;
       rebuildProjectSelect();
@@ -4485,6 +4995,61 @@ function handleIncomingServerEvent(data, eventName) {
     return;
   }
 
+  if (kind === 'agent.status.changed') {
+    const applyStatusPatch = (list) => {
+      if (!Array.isArray(list)) return false;
+      let changed = false;
+      for (const m of list) {
+        if (!m) continue;
+        const isMatch =
+          (data.terminalId && (m.terminalHandle === data.terminalId || m.terminalId === data.terminalId)) ||
+          (data.paneKey && m.paneKey === data.paneKey) ||
+          (data.sessionId && m.sessionId === data.sessionId) ||
+          (data.id && m.id === data.id) ||
+          (data.member && m.id === data.member);
+        if (!isMatch) continue;
+        if (data.liveState) m.liveState = data.liveState;
+        if (data.status || data.state) m.status = data.status || data.state;
+        if (data.sessionId) m.sessionId = data.sessionId;
+        if (data.workspaceId) m.workspaceId = data.workspaceId;
+        if (data.workspaceListId) m.workspaceListId = data.workspaceListId;
+        if (data.mainAgent) m.mainAgent = data.mainAgent;
+        if (data.outcome !== undefined) m.outcome = data.outcome;
+        else if (data.mainAgent?.outcome !== undefined) m.outcome = data.mainAgent.outcome;
+        changed = true;
+      }
+      return changed;
+    };
+
+    const hitLocal = applyStatusPatch(members);
+    const activeBucket = getActiveBucket();
+    if (activeBucket?.members) applyStatusPatch(activeBucket.members);
+    for (const bucket of orcaBuckets.values()) {
+      if (bucket !== activeBucket && bucket?.members) applyStatusPatch(bucket.members);
+    }
+
+    if (hitLocal) {
+      renderMembers();
+      renderFiles();
+      if (document.getElementById('steerDrawerBackdrop')?.classList.contains('open') && currentSteerTarget) {
+        const refreshed = members.find(x => x.id === currentSteerTarget.memberId);
+        if (refreshed) {
+          currentSteerTarget.liveState = refreshed.liveState || currentSteerTarget.liveState;
+          currentSteerTarget.outcome = getMemberOutcome(refreshed);
+          currentSteerTarget.sessionId = refreshed.sessionId || currentSteerTarget.sessionId;
+          currentSteerTarget.workspaceId = refreshed.workspaceId || currentSteerTarget.workspaceId;
+          currentSteerTarget.workspaceListId = refreshed.workspaceListId || currentSteerTarget.workspaceListId;
+          refreshOpenSteerDrawerCopy(currentSteerTarget);
+        }
+      }
+    }
+    return;
+  }
+
+  if (kind === 'workspace.created' || kind === 'workspace.removed' || kind === 'workspace.changed') {
+    return;
+  }
+
   if (kind === 'project' && data.project) {
     switchProject(data.project, false);
   }
@@ -4495,7 +5060,7 @@ try {
   evtSource.onopen = () => {
     console.log('[Swarm ADE] SSE connected to /events');
   };
-  ['snapshot', 'orca_update', 'orca_status', 'post', 'member', 'activity', 'title', 'project', 'agent.status.changed'].forEach(evName => {
+  ['snapshot', 'orca_update', 'orca_status', 'post', 'member', 'activity', 'title', 'project', 'agent.status.changed', 'workspace.created', 'workspace.removed', 'workspace.changed'].forEach(evName => {
     evtSource.addEventListener(evName, (e) => {
       try {
         handleIncomingServerEvent(JSON.parse(e.data), evName);
@@ -4644,6 +5209,8 @@ function applyUiLanguageMode(nextMode) {
   if (!currentSteerTarget) {
     setText('steerDrawerTitle', 'Send Instructions / Pass Job', 'Steer & Hand Off');
     setText('steerDrawerSub', 'Selected AI', 'Target details');
+    setText('steerFocusBtn', 'Show in Orca', 'Focus in Orca');
+    setText('steerFocusHint', 'Brings this AI window or folder to the front in Orca.', 'Runs terminal switch or workspace activate in Orca.');
   }
   setText('steerCloseBtn', 'Close', 'Close');
   setText('steerTargetDetailsTitle', 'Where This AI Is Working', 'Target Details');
@@ -4679,6 +5246,7 @@ function applyUiLanguageMode(nextMode) {
   rebuildProjectSelect();
   updateLiveBadge();
   syncUI();
+  renderSessionsSection();
   if (document.getElementById('steerDrawerBackdrop')?.classList.contains('open') && currentSteerTarget) {
     refreshOpenSteerDrawerCopy(currentSteerTarget);
   }
