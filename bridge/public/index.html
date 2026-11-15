@@ -12,8 +12,8 @@
       --tl-label-w: 174px;
     }
     html[data-theme="light"] {
-      --bg: #ffffff; --surface: #f8f9fb; --surface-2: #f1f3f6; --hover: #f4f5f7;
-      --border: #e5e7eb; --border-strong: #d1d5db; --text: #111827; --text-2: #374151;
+      --bg: var(--orca-background, #ffffff); --surface: #f8f9fb; --surface-2: #f1f3f6; --hover: #f4f5f7;
+      --border: #e5e7eb; --border-strong: #d1d5db; --text: var(--orca-foreground, #111827); --text-2: #374151;
       --muted: #6b7280; --dim: #9ca3af; --chip-bg: #eef2f6;
       --accent-soft: #e0f2fe; --accent-ink: #0369a1; --live: #16a34a; --live-soft: rgba(22, 163, 74, 0.12);
       --amber: #d97706; --amber-soft: rgba(217, 119, 6, 0.12);
@@ -25,8 +25,8 @@
       --tooltip-bg: #ffffff; --shadow: 0 6px 20px rgba(15, 23, 42, 0.08);
     }
     html[data-theme="dark"] {
-      --bg: #111317; --surface: #16191f; --surface-2: #1e222a; --hover: #1b1f26;
-      --border: #262a33; --border-strong: #373d4a; --text: #f3f4f6; --text-2: #d1d5db;
+      --bg: var(--orca-background, #111317); --surface: #16191f; --surface-2: #1e222a; --hover: #1b1f26;
+      --border: #262a33; --border-strong: #373d4a; --text: var(--orca-foreground, #f3f4f6); --text-2: #d1d5db;
       --muted: #9ca3af; --dim: #6b7280; --chip-bg: #222732;
       --accent-soft: #172a3d; --accent-ink: #7dd3fc; --live: #22c55e; --live-soft: rgba(34, 197, 94, 0.14);
       --amber: #f59e0b; --amber-soft: rgba(245, 158, 11, 0.14);
@@ -84,6 +84,7 @@
       border-radius: 7px; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;
     }
     .icon-btn:hover, .icon-btn.open { background: var(--surface-2); border-color: var(--border-strong); color: var(--text); }
+    .icon-btn[hidden] { display: none; }
     .icon-btn svg { width: 15px; height: 15px; }
     .icon-btn .settings-dot {
       position: absolute; top: 4px; right: 4px; width: 5px; height: 5px;
@@ -121,8 +122,8 @@
     .tab.active::after { content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; background: var(--text); border-radius: 1px; }
     .tab-count { font-size: 12px; color: var(--dim); font-weight: 400; font-variant-numeric: tabular-nums; }
 
-    main { flex: 1; position: relative; overflow: hidden; }
-    .view { position: absolute; inset: 0; display: none; flex-direction: column; background: var(--bg); }
+    main { flex: 1; position: relative; overflow: hidden; min-width: 0; max-width: 100%; }
+    .view { position: absolute; inset: 0; display: none; flex-direction: column; background: var(--bg); min-width: 0; max-width: 100%; overflow-x: hidden; }
     .view.active { display: flex; }
 
     /* Graph */
@@ -661,14 +662,45 @@
       .drawer { width: 100vw; max-width: 100vw; }
       .search-row, .files-toolbar { flex-wrap: wrap; }
       .files-toolbar-left { min-width: 0; width: 100%; }
-      .files-toolbar .search-box { max-width: 100% !important; flex: 1 1 160px; min-width: 140px; }
-      .search-row .search-box { flex: 1 1 160px; min-width: 140px; }
+      .files-toolbar .search-box { max-width: 100% !important; flex: 1 1 160px; min-width: 120px; }
+      .search-row .search-box { flex: 1 1 160px; min-width: 120px; }
       .modal { max-height: 92vh; overflow-y: auto; }
       .act-toolbar { flex-wrap: wrap; }
       .post-top, .member-top, .spc-head { flex-wrap: wrap; gap: 6px; }
-      .member-actions { justify-content: flex-start; }
+      .member-actions { justify-content: flex-start; max-width: 100%; }
       .session-card { flex-wrap: wrap; }
       .wt-card-head { gap: 8px; }
+    }
+    @media (max-width: 440px) {
+      .top-header { padding: 8px 10px 6px; gap: 5px; }
+      .header-left { min-width: 48px; }
+      #projectSelect { padding: 0 6px; font-size: 11.5px; height: 28px; line-height: 26px; width: 100%; }
+      .header-right { gap: 4px; }
+      .header-right #openCustomBtn { padding: 0 7px; font-size: 11.5px; height: 28px; }
+      .live-indicator { padding: 0 4px; font-size: 11.5px; gap: 4px; height: 28px; }
+      .icon-btn { width: 28px; height: 28px; }
+      .tab-bar { gap: 10px; padding: 0 10px; }
+      .tab { font-size: 12px; }
+      .composer-input-wrap, .composer input, .graph-composer input { min-width: 0; flex: 1 1 120px; }
+      .composer select, .graph-composer select, #memberFilter { max-width: 100%; min-width: 0; }
+      .mention-menu { min-width: 160px; max-width: calc(100vw - 32px); }
+      .timeline-scroll { overflow-x: hidden; }
+      .tl-track { min-width: 0; overflow: hidden; }
+      .act-card { flex-wrap: wrap; gap: 6px; }
+      .act-left { flex: 1 1 180px; min-width: 0; }
+      .act-left > div { min-width: 0; flex: 1; }
+      .seg-toggle { max-width: 100%; flex-wrap: wrap; }
+      .seg-btn { padding: 4px 8px; font-size: 11.5px; }
+      .file-row { flex-wrap: wrap; gap: 6px; }
+      .file-left { flex: 1 1 160px; min-width: 0; }
+      .file-right { width: 100%; justify-content: flex-end; flex-wrap: wrap; }
+      .drawer-head { padding: 11px 12px; }
+      .drawer-body { padding: 12px 12px 18px; }
+      .drawer-foot-row, .drawer-section-title { flex-wrap: wrap; gap: 6px; }
+      .session-card, .session-main, .session-meta { min-width: 0; max-width: 100%; }
+      .session-meta { word-break: break-word; }
+      .spc-head > div { flex-wrap: wrap; }
+      #spcRoute { min-width: 0; word-break: break-word; }
     }
   </style>
 </head>
@@ -682,6 +714,13 @@
     <div class="header-right">
       <button type="button" id="openCustomBtn" class="ghost-btn">+ Custom Agent</button>
       <button type="button" id="liveBtn" class="live-indicator"><span class="live-dot"></span><span id="liveText">Live</span></button>
+      <button type="button" id="popOutBtn" class="icon-btn" title="Open in full Orca tab" aria-label="Open in full Orca tab" hidden>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
+          <polyline points="15 3 21 3 21 9"></polyline>
+          <line x1="10" y1="14" x2="21" y2="3"></line>
+        </svg>
+      </button>
       <button type="button" id="settingsBtn" class="icon-btn" aria-haspopup="true" aria-expanded="false" title="Settings">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <circle cx="12" cy="12" r="3"></circle>
@@ -691,6 +730,7 @@
       </button>
     </div>
   </div>
+  <div id="panelStatusBanner" class="status-banner" style="margin:0 12px 6px;" role="status" aria-live="polite"></div>
 
   <div id="settingsMenu" class="settings-menu" role="dialog" aria-label="Settings" aria-hidden="true">
     <div class="settings-section">
@@ -1138,6 +1178,61 @@ let uiMode = localStorage.getItem(UI_MODE_STORAGE_KEY) === 'dev' ? 'dev' : 'simp
 function isSimpleUi() { return uiMode === 'simple'; }
 function tUi(simpleStr, devStr) { return uiMode === 'simple' ? simpleStr : devStr; }
 
+const isOrcaPanel = typeof window.orca?.plugin?.request === 'function' &&
+  window.location.protocol !== 'http:' &&
+  window.location.protocol !== 'https:';
+
+let userThemeOverride = false;
+function detectOrcaInitialTheme() {
+  const root = document.documentElement;
+  if (root.classList.contains('dark')) return 'dark';
+  if (root.classList.contains('light')) return 'light';
+  const envScheme = window.orca?.env?.theme?.colorScheme;
+  if (envScheme === 'dark' || envScheme === 'light') return envScheme;
+  if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) return 'dark';
+  return 'light';
+}
+function applyTheme(nextTheme, isManual = false) {
+  const resolved = nextTheme === 'dark' ? 'dark' : 'light';
+  document.documentElement.dataset.theme = resolved;
+  const themeBtn = document.getElementById('themeBtn');
+  if (themeBtn) themeBtn.textContent = resolved === 'light' ? 'Dark' : 'Light';
+  if (isManual) userThemeOverride = true;
+}
+if (isOrcaPanel) {
+  applyTheme(detectOrcaInitialTheme(), false);
+  if (typeof window.orca?.on === 'function') {
+    try {
+      window.orca.on('theme', (payload) => {
+        const scheme = payload?.colorScheme;
+        if (!userThemeOverride && (scheme === 'light' || scheme === 'dark')) {
+          applyTheme(scheme, false);
+        }
+      });
+    } catch (err) {
+      console.warn('[Swarm ADE] Could not subscribe to Orca theme events:', err);
+    }
+  }
+}
+
+let panelStatusTimer = null;
+function showPanelStatusBanner(kind, text) {
+  const el = document.getElementById('panelStatusBanner');
+  if (!el) return;
+  clearTimeout(panelStatusTimer);
+  if (!kind || !text) {
+    el.className = 'status-banner';
+    el.textContent = '';
+    return;
+  }
+  el.className = `status-banner show ${kind}`;
+  el.textContent = text;
+  panelStatusTimer = setTimeout(() => {
+    el.className = 'status-banner';
+    el.textContent = '';
+  }, 6000);
+}
+
 function getBridgeToken() {
   return document.querySelector('meta[name="orca-swarm-token"]')?.getAttribute('content') || '';
 }
@@ -1146,6 +1241,52 @@ function bridgeJsonHeaders() {
   return token
     ? { 'Content-Type': 'application/json', 'X-Orca-Swarm-Token': token }
     : { 'Content-Type': 'application/json' };
+}
+async function bridgeFetch(path, options = {}) {
+  const method = String(options.method || 'GET').toUpperCase();
+  let parsedBody;
+  let rawBody;
+  if (options.body !== undefined && options.body !== null) {
+    if (typeof options.body === 'string') {
+      rawBody = options.body;
+      try {
+        parsedBody = JSON.parse(options.body);
+      } catch {
+        parsedBody = options.body;
+      }
+    } else {
+      parsedBody = options.body;
+      rawBody = JSON.stringify(options.body);
+    }
+  }
+
+  if (isOrcaPanel) {
+    const rpcInput = method === 'GET' ? { method, path } : { method, path, body: parsedBody ?? {} };
+    const rpcRes = await window.orca.plugin.request('bridge.rpc', rpcInput);
+    const hasEnvelope = rpcRes && typeof rpcRes === 'object' && ('status' in rpcRes || 'data' in rpcRes);
+    const status = hasEnvelope && typeof rpcRes.status === 'number'
+      ? rpcRes.status
+      : (rpcRes?.ok === false ? 500 : 200);
+    const ok = hasEnvelope && typeof rpcRes.ok === 'boolean'
+      ? rpcRes.ok
+      : (status >= 200 && status < 300);
+    const payload = hasEnvelope && 'data' in rpcRes ? rpcRes.data : rpcRes;
+    return {
+      ok,
+      status,
+      async json() { return payload; },
+      async text() { return typeof payload === 'string' ? payload : JSON.stringify(payload ?? null); }
+    };
+  }
+
+  const fetchOpts = { method };
+  if (method !== 'GET' && method !== 'HEAD') {
+    fetchOpts.headers = options.headers || bridgeJsonHeaders();
+    if (rawBody !== undefined) fetchOpts.body = rawBody;
+  } else if (options.headers) {
+    fetchOpts.headers = options.headers;
+  }
+  return fetch(path, fetchOpts);
 }
 
 function formatStateLabel(state) {
@@ -1887,14 +2028,14 @@ async function focusTargetInOrca(target, btnEl, statusFn) {
     const body = terminalHandle
       ? { terminalHandle }
       : (worktreePath ? { worktreePath, worktreeId } : { worktreeId });
-    let res = await fetch('/api/terminal/focus', {
+    let res = await bridgeFetch('/api/terminal/focus', {
       method: 'POST',
       headers: bridgeJsonHeaders(),
       body: JSON.stringify(body)
     });
     let data = await res.json().catch(() => ({}));
     if ((!res.ok || data.ok === false) && res.status === 400 && terminalHandle && (worktreePath || worktreeId)) {
-      res = await fetch('/api/terminal/focus', {
+      res = await bridgeFetch('/api/terminal/focus', {
         method: 'POST',
         headers: bridgeJsonHeaders(),
         body: JSON.stringify(worktreePath ? { worktreePath, worktreeId } : { worktreeId })
@@ -2042,7 +2183,7 @@ function registerMember(cfg, brief, broadcast = true) {
   }
   if (broadcast) {
     persistCustomAgent(cfg, brief);
-    fetch('/api/members', {
+    bridgeFetch('/api/members', {
       method: 'POST',
       headers: bridgeJsonHeaders(),
       body: JSON.stringify({ member: cfg, initialBrief: brief })
@@ -2127,7 +2268,7 @@ function addPost(from, text, broadcast = true) {
   syncUI();
 
   if (broadcast) {
-    fetch('/events', {
+    bridgeFetch('/events', {
       method: 'POST',
       headers: bridgeJsonHeaders(),
       body: JSON.stringify({
@@ -2232,11 +2373,30 @@ window.addEventListener('keydown', (e) => {
   }
 });
 
-document.getElementById('themeBtn').onclick = (e) => {
+document.getElementById('themeBtn').onclick = () => {
   const next = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light';
-  document.documentElement.dataset.theme = next;
-  e.target.textContent = next === 'light' ? 'Dark' : 'Light';
+  applyTheme(next, true);
 };
+
+const popOutBtnEl = document.getElementById('popOutBtn');
+if (popOutBtnEl) {
+  popOutBtnEl.hidden = !isOrcaPanel;
+  popOutBtnEl.addEventListener('click', async () => {
+    if (!isOrcaPanel || typeof window.orca?.plugin?.request !== 'function') return;
+    popOutBtnEl.disabled = true;
+    showPanelStatusBanner(null, '');
+    try {
+      const res = await window.orca.plugin.request('swarm.openTab');
+      if (res && typeof res === 'object' && res.ok === false) {
+        showPanelStatusBanner('err', res.error || tUi('Could not open Swarm in a full tab.', 'Failed to open Swarm tab.'));
+      }
+    } catch (err) {
+      showPanelStatusBanner('err', err?.message || tUi('Could not open Swarm in a full tab.', 'Failed to open Swarm tab.'));
+    } finally {
+      popOutBtnEl.disabled = false;
+    }
+  });
+}
 document.getElementById('hideInactiveToggle').onclick = (e) => { hideInactive = !hideInactive; e.currentTarget.querySelector('.switch').classList.toggle('on', hideInactive); };
 document.getElementById('expandAllToggle').onclick = (e) => { expandAll = !expandAll; e.currentTarget.querySelector('.switch').classList.toggle('on', expandAll); };
 document.getElementById('replayBarToggleBtn')?.addEventListener('click', () => {
@@ -2526,7 +2686,7 @@ function wireComposer(inputElId, senderElId, btnElId, toggleElId, menuElId) {
     setComposerDispatchStatus('muted', 'Dispatching...');
 
     try {
-      const res = await fetch('/api/dispatch-mentions', {
+      const res = await bridgeFetch('/api/dispatch-mentions', {
         method: 'POST',
         headers: bridgeJsonHeaders(),
         body: JSON.stringify({
@@ -2677,7 +2837,7 @@ function renderPresetOptions() {
 
 async function loadAgentPresets() {
   try {
-    const res = await fetch('/api/presets');
+    const res = await bridgeFetch('/api/presets');
     if (!res.ok) return;
     const data = await res.json();
     if (Array.isArray(data.presets)) {
@@ -3403,7 +3563,7 @@ function renderCustomModelOptions() {
 async function loadAvailableModels(refresh = false) {
   const url = refresh ? '/api/models?refresh=1' : '/api/models';
   try {
-    const res = await fetch(url);
+    const res = await bridgeFetch(url);
     if (!res.ok) return null;
     const data = await res.json().catch(() => null);
     if (!data || data.ok === false) return null;
@@ -3483,7 +3643,7 @@ document.getElementById('createCustomBtn').onclick = () => {
   };
   const brief = document.getElementById('caBrief').value;
   if (document.getElementById('caSavePreset')?.checked) {
-    fetch('/api/presets', {
+    bridgeFetch('/api/presets', {
       method: 'POST',
       headers: bridgeJsonHeaders(),
       body: JSON.stringify({ preset: { ...cfg, brief } })
@@ -3503,8 +3663,7 @@ window.addEventListener('message', (event) => {
   if (event.origin && event.origin !== window.location.origin) return;
   const msg = event.data;
   if (msg?.type === 'swarm:theme' && (msg.theme === 'light' || msg.theme === 'dark')) {
-    document.documentElement.dataset.theme = msg.theme;
-    document.getElementById('themeBtn').textContent = msg.theme === 'light' ? 'Dark' : 'Light';
+    applyTheme(msg.theme, true);
   }
   if (msg?.type === 'swarm:register-member') registerMember(msg.member, msg.initialBrief);
   if (msg?.type === 'swarm:post') addPost(msg.from, msg.text);
@@ -3530,7 +3689,7 @@ function saveSwarmTitle() {
   const val = swarmTitleEl.textContent.trim() || 'Universal Software Dev Swarm';
   swarmTitleEl.textContent = val;
   localStorage.setItem(SWARM_TITLE_STORAGE_KEY, val);
-  fetch('/events', {
+  bridgeFetch('/events', {
     method: 'POST',
     headers: bridgeJsonHeaders(),
     body: JSON.stringify({ type: 'title', title: val })
@@ -3737,7 +3896,7 @@ async function openFileDiff(worktreePath, filePath, btnEl) {
     btnEl.textContent = tUi('Opening...', 'Opening...');
   }
   try {
-    const res = await fetch('/api/files/open-diff', {
+    const res = await bridgeFetch('/api/files/open-diff', {
       method: 'POST',
       headers: bridgeJsonHeaders(),
       body: JSON.stringify({ worktreePath, filePath })
@@ -3761,7 +3920,7 @@ async function openFileDiff(worktreePath, filePath, btnEl) {
 async function refreshFilesForActiveProject() {
   if (!activeProjectId || !activeProjectId.startsWith('orca:')) return;
   try {
-    const res = await fetch(`/api/files?project=${encodeURIComponent(activeProjectId)}`);
+    const res = await bridgeFetch(`/api/files?project=${encodeURIComponent(activeProjectId)}`);
     if (!res.ok) return;
     const data = await res.json().catch(() => null);
     if (!data || data.ok === false) return;
@@ -4243,7 +4402,7 @@ document.getElementById('steerTerminalForm')?.addEventListener('submit', async (
   setSteerStatus(null, '');
 
   try {
-    const res = await fetch('/api/terminal/send', {
+    const res = await bridgeFetch('/api/terminal/send', {
       method: 'POST',
       headers: bridgeJsonHeaders(),
       body: JSON.stringify({
@@ -4314,7 +4473,7 @@ document.getElementById('handoffForm')?.addEventListener('submit', async (e) => 
   setSteerStatus(null, '');
 
   try {
-    const res = await fetch('/api/handoff', {
+    const res = await bridgeFetch('/api/handoff', {
       method: 'POST',
       headers: bridgeJsonHeaders(),
       body: JSON.stringify({
@@ -4387,7 +4546,7 @@ function applyBucket(bucket, resetView = true) {
   })();
 
   members.length = 0;
-  (bucket.members || []).forEach(m => members.push({ ...m }));
+  (bucket.members || []).forEach(m => members.push({ joinedAtPost: 0, retiredAtPost: null, ...m }));
   customSaved.forEach(item => {
     const matchesBucket = item?.projectId
       ? item.projectId === bucket.id
@@ -4618,7 +4777,7 @@ async function resumePastSession(session, btnEl) {
   }
   setMembersBanner(null, '');
   try {
-    const res = await fetch('/api/sessions/resume', {
+    const res = await bridgeFetch('/api/sessions/resume', {
       method: 'POST',
       headers: bridgeJsonHeaders(),
       body: JSON.stringify({
@@ -4775,7 +4934,7 @@ async function loadRecentSessions() {
   if (q && !q.startsWith('-')) params.set('q', q);
 
   try {
-    const res = await fetch(`/api/sessions?${params.toString()}`);
+    const res = await bridgeFetch(`/api/sessions?${params.toString()}`);
     const data = await res.json().catch(() => null);
     if (!res.ok || !data || data.ok === false) {
       sessionsState.error = data?.error || tUi(`Could not load past chats (HTTP ${res.status}).`, `Failed to load sessions (HTTP ${res.status}).`);
@@ -4908,6 +5067,7 @@ function handleIncomingServerEvent(data, eventName) {
   const kind = eventName || data.type;
 
   if (kind === 'snapshot') {
+    lastSnapshotRefreshAt = Date.now();
     if (data.orcaStatus) latestOrcaStatus = data.orcaStatus;
     if (Array.isArray(data.worktrees)) latestOrcaWorktrees = data.worktrees;
     if (Array.isArray(data.terminals)) {
@@ -4924,6 +5084,7 @@ function handleIncomingServerEvent(data, eventName) {
   }
 
   if (kind === 'orca_update') {
+    lastSnapshotRefreshAt = Date.now();
     if (data.orcaStatus) latestOrcaStatus = data.orcaStatus;
     if (Array.isArray(data.worktrees)) latestOrcaWorktrees = data.worktrees;
     if (Array.isArray(data.terminals)) {
@@ -4933,6 +5094,11 @@ function handleIncomingServerEvent(data, eventName) {
     updateActiveOrcaFields(data);
     if (Array.isArray(data.orcaProjects)) ingestOrcaProjects(data.orcaProjects);
     updateLiveBadge();
+    return;
+  }
+
+  if (kind === 'orca_update_ping') {
+    scheduleSnapshotRefresh(100);
     return;
   }
 
@@ -5047,6 +5213,7 @@ function handleIncomingServerEvent(data, eventName) {
   }
 
   if (kind === 'workspace.created' || kind === 'workspace.removed' || kind === 'workspace.changed') {
+    if (isOrcaPanel) scheduleSnapshotRefresh(250);
     return;
   }
 
@@ -5055,33 +5222,160 @@ function handleIncomingServerEvent(data, eventName) {
   }
 }
 
-try {
-  const evtSource = new EventSource('/events');
-  evtSource.onopen = () => {
-    console.log('[Swarm ADE] SSE connected to /events');
-  };
-  ['snapshot', 'orca_update', 'orca_status', 'post', 'member', 'activity', 'title', 'project', 'agent.status.changed', 'workspace.created', 'workspace.removed', 'workspace.changed'].forEach(evName => {
-    evtSource.addEventListener(evName, (e) => {
+let snapshotRefreshInFlight = null;
+let snapshotRefreshQueued = false;
+let snapshotRefreshTimer = null;
+let lastSnapshotRefreshAt = 0;
+
+async function refreshSnapshotNow(opts = {}) {
+  if (snapshotRefreshInFlight) {
+    snapshotRefreshQueued = true;
+    return snapshotRefreshInFlight;
+  }
+  snapshotRefreshInFlight = (async () => {
+    try {
+      const path = opts.compact ? '/api/snapshot?compact=1' : '/api/snapshot';
+      let res = await bridgeFetch(path);
+      if (!res.ok && !opts.compact) {
+        res = await bridgeFetch('/api/snapshot?compact=1');
+      }
+      if (!res.ok) return null;
+      const data = await res.json().catch(() => null);
+      if (data && typeof data === 'object') {
+        lastSnapshotRefreshAt = Date.now();
+        handleIncomingServerEvent(data, 'snapshot');
+      }
+      return data;
+    } catch (err) {
+      if (!opts.compact) {
+        try {
+          const fallbackRes = await bridgeFetch('/api/snapshot?compact=1');
+          if (fallbackRes.ok) {
+            const fallbackData = await fallbackRes.json().catch(() => null);
+            if (fallbackData && typeof fallbackData === 'object') {
+              lastSnapshotRefreshAt = Date.now();
+              handleIncomingServerEvent(fallbackData, 'snapshot');
+              return fallbackData;
+            }
+          }
+        } catch {}
+      }
+      console.warn('[Swarm ADE] Snapshot refresh failed:', err);
+      return null;
+    } finally {
+      snapshotRefreshInFlight = null;
+      if (snapshotRefreshQueued) {
+        snapshotRefreshQueued = false;
+        scheduleSnapshotRefresh(250);
+      }
+    }
+  })();
+  return snapshotRefreshInFlight;
+}
+
+function scheduleSnapshotRefresh(delayMs = 150) {
+  clearTimeout(snapshotRefreshTimer);
+  snapshotRefreshTimer = setTimeout(() => {
+    refreshSnapshotNow();
+  }, delayMs);
+}
+
+function connectLiveStream() {
+  if (isOrcaPanel) {
+    const panelDisposables = [];
+
+    if (typeof window.orca?.plugin?.on === 'function') {
       try {
-        handleIncomingServerEvent(JSON.parse(e.data), evName);
+        const sub = window.orca.plugin.on('swarm.sse', (msg) => {
+          if (!msg || typeof msg !== 'object') return;
+          const evName = msg.event || msg.type;
+          const evData = 'data' in msg ? msg.data : msg;
+          if (evName === 'orca_update_ping') {
+            scheduleSnapshotRefresh(100);
+            return;
+          }
+          handleIncomingServerEvent(evData, evName);
+        });
+        if (sub && typeof sub.dispose === 'function') panelDisposables.push(sub);
       } catch (err) {
-        console.warn(`[Swarm ADE] SSE parse error (${evName}):`, err);
+        console.warn('[Swarm ADE] Could not subscribe to swarm.sse:', err);
+      }
+    }
+
+    if (typeof window.orca?.on === 'function') {
+      ['agent.status.changed', 'workspace.created', 'workspace.removed', 'workspace.changed'].forEach((evName) => {
+        try {
+          const sub = window.orca.on(evName, (payload) => {
+            if (evName === 'agent.status.changed') {
+              handleIncomingServerEvent(payload, 'agent.status.changed');
+            } else {
+              handleIncomingServerEvent(payload || {}, evName);
+            }
+          });
+          if (sub && typeof sub.dispose === 'function') panelDisposables.push(sub);
+        } catch (err) {
+          console.warn(`[Swarm ADE] Could not subscribe to orca.${evName}:`, err);
+        }
+      });
+    }
+
+    refreshSnapshotNow();
+
+    const fallbackInterval = setInterval(() => {
+      if (document.visibilityState === 'hidden') return;
+      if (Date.now() - lastSnapshotRefreshAt > 10000) {
+        refreshSnapshotNow();
+      }
+    }, 12000);
+
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible' && Date.now() - lastSnapshotRefreshAt > 4000) {
+        refreshSnapshotNow();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+
+    window.addEventListener('beforeunload', () => {
+      clearInterval(fallbackInterval);
+      clearTimeout(snapshotRefreshTimer);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+      for (const sub of panelDisposables) {
+        try { sub.dispose(); } catch {}
       }
     });
-  });
-  evtSource.onmessage = (e) => {
-    try {
-      handleIncomingServerEvent(JSON.parse(e.data));
-    } catch (err) {
-      console.warn('[Swarm ADE] SSE JSON parse error:', err);
-    }
-  };
-  evtSource.onerror = () => {
-    // EventSource auto-reconnects
-  };
-} catch (e) {
-  console.warn('[Swarm ADE] EventSource initialization failed:', e);
+    return;
+  }
+
+  try {
+    const evtSource = new EventSource('/events');
+    evtSource.onopen = () => {
+      console.log('[Swarm ADE] SSE connected to /events');
+    };
+    ['snapshot', 'orca_update', 'orca_update_ping', 'orca_status', 'post', 'member', 'activity', 'title', 'project', 'agent.status.changed', 'workspace.created', 'workspace.removed', 'workspace.changed'].forEach(evName => {
+      evtSource.addEventListener(evName, (e) => {
+        try {
+          handleIncomingServerEvent(JSON.parse(e.data), evName);
+        } catch (err) {
+          console.warn(`[Swarm ADE] SSE parse error (${evName}):`, err);
+        }
+      });
+    });
+    evtSource.onmessage = (e) => {
+      try {
+        handleIncomingServerEvent(JSON.parse(e.data));
+      } catch (err) {
+        console.warn('[Swarm ADE] SSE JSON parse error:', err);
+      }
+    };
+    evtSource.onerror = () => {
+      // EventSource auto-reconnects
+    };
+  } catch (e) {
+    console.warn('[Swarm ADE] EventSource initialization failed:', e);
+  }
 }
+
+connectLiveStream();
 
 function applyUiLanguageMode(nextMode) {
   uiMode = nextMode === 'dev' ? 'dev' : 'simple';
@@ -5112,6 +5406,8 @@ function applyUiLanguageMode(nextMode) {
   setText('openCustomBtn', '+ Add AI', '+ Custom Agent');
   setAttr('swarmTitle', 'title', 'Click to rename this team', 'Click to edit swarm title');
   setAttr('projectSelect', 'title', 'Choose which project to watch', 'Select Project');
+  setAttr('popOutBtn', 'title', 'Open in bigger tab', 'Pop Out to Orca Tab');
+  setAttr('popOutBtn', 'aria-label', 'Open in bigger tab', 'Pop Out to Orca Tab');
   setAttr('settingsBtn', 'title', 'Settings', 'Settings');
   setText('settingsModeSectionTitle', 'Mode & Look', 'Mode & Theme');
   setText('settingsLangLabel', 'Language', 'Language');

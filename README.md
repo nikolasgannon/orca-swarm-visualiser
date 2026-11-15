@@ -1,10 +1,12 @@
 # Swarm Visualiser for Orca
 
-An open-source add-on for [Orca ADE](https://github.com/stablyai/orca) under an MIT licence. It polls Orca worktrees and terminals to detect active coding agents, discovers local agent profiles and presets, and streams live activity through an HTTP and SSE event bridge to an interactive browser canvas with a standalone demo mode.
+An open-source add-on for [Orca ADE](https://github.com/stablyai/orca) under an MIT licence. It runs inside Orca's far-right sidebar panel and polls Orca worktrees and terminals to detect active coding agents. It also discovers local agent profiles and presets, streaming live activity to the Orca panel (`bridge.rpc` and `swarm.sse`), a standalone browser tab, and an offline demo mode.
 
 Built for multi-agent coding sessions where keeping Git worktrees tidy and avoiding overlapping edits matters.
 
 ## What it does
+
+- **Native Orca sidebar panel and Pop Out tab**: Opens in Orca's far-right sidebar from the `Swarm` status bar item (showing live active agent counts) or `Cmd+J` (`Ctrl+J` on Windows/Linux). It matches Orca's light and dark themes automatically and includes a `Pop Out` button in the header to launch a full-window Orca tab.
 
 - **Live Orca workspace polling**: Tracks active projects, Git worktrees, subagents, and live terminal sessions, automatically following the workspace focused in Orca. Polls at `1.5s` when browser clients are connected, backs off to `15s` when idle, and refreshes right away on Orca workspace or agent status events.
 - **Outcome badges and session resume**: Displays agent run outcomes (`completed`, `failed`, `stopped`) and session IDs, lists recent past sessions (`GET /api/sessions` via local worker IPC with `orca search` keyword fallback), and resumes stopped sessions in one click (`POST /api/sessions/resume`).
@@ -24,7 +26,7 @@ Built for multi-agent coding sessions where keeping Git worktrees tidy and avoid
 orca plugin install nikolasgannon/orca-swarm-visualiser
 ```
 
-Orca prints an explicit `--approve <fingerprint>` command on first install. Re-run with that flag to grant `agent:read`, `workspace:read`, `history:read`, and `agent:launch` access (Orca `1.4.259+`), then click `Swarm` in Orca's status bar or run `Swarm: Open Swarm Visualiser` in the quick palette (`Cmd+J` on macOS, `Ctrl+J` on Windows/Linux).
+Orca prints an explicit `--approve <fingerprint>` command on first install. Re-run with that flag to grant `agent:read`, `workspace:read`, `history:read`, and `agent:launch` access (Orca `1.4.259+`). Click `Swarm` in Orca's status bar or run `Swarm: Open Swarm Visualiser` in the quick palette (`Cmd+J` on macOS, `Ctrl+J` on Windows/Linux) to open the far-right sidebar panel. Use the `Pop Out` header icon (`Swarm: Open Swarm Tab (Full Window)`) for a full browser tab.
 
 ### 2. Local development in Orca
 
@@ -33,7 +35,7 @@ orca plugin validate .
 orca plugin dev load .
 ```
 
-Re-run `dev load` with the printed `--approve` flag, then launch `Swarm: Open Swarm Visualiser` or open a split tab:
+Re-run `dev load` with the printed `--approve` flag, then run `Swarm: Open Swarm Visualiser` to open the native sidebar panel, or `Swarm: Open Swarm Tab (Full Window)` / `orca tab create`:
 
 ```bash
 orca tab create --url http://127.0.0.1:4319
@@ -96,11 +98,11 @@ curl -X POST http://127.0.0.1:4319/events \
 
 ## Project structure
 
-- `orca-plugin.json`: Orca v2 plugin manifest (`0.2.1`, `trusted-worker`, `engines.orca >=1.4.259`).
+- `orca-plugin.json`: Orca v2 plugin manifest (`0.3.0`, `trusted-worker`, `contributes.panels` sidebar entry, `engines.orca >=1.4.259`).
 - `tsconfig.json`: TypeScript configuration for Orca plugin typings.
-- `src/worker.ts`: Orca plugin worker (bridge launcher, command registration, event forwarding, and loopback session IPC).
-- `bridge/server.mjs`: Zero-dependency HTTP/SSE bridge, Orca poller, and CLI discovery server.
-- `bridge/public/index.html`: Single-file canvas UI with Simple/Dev language modes and demo mode.
+- `src/worker.ts`: Orca plugin worker (bridge launcher, `bridge.rpc` / `swarm.openTab` panel handlers, `swarm.sse` event relay, status bar updates, command registration, and loopback session IPC).
+- `bridge/server.mjs`: Zero-dependency HTTP/SSE bridge, `/api/snapshot` compaction, Orca poller, and CLI discovery server.
+- `bridge/public/index.html`: Single-file canvas UI with Orca native sidebar panel adapter (`window.orca.plugin`), standalone HTTP mode, Simple/Dev language modes, theme sync, and demo mode.
 - `hooks/swarm-hook.mjs`: CLI tool hook for external agent logging.
 - `SECURITY.md`: Security architecture, user safeguards, and vulnerability disclosure policy.
 

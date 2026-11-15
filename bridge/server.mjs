@@ -28,6 +28,9 @@ const MAX_POSTS = 500;
 const MAX_ACTIVITIES = 500;
 const MAX_MEMBERS = 200;
 const MAX_SSE_CLIENTS = 64;
+const SSE_KEEPALIVE_INTERVAL_MS = 20000;
+const SNAPSHOT_COMPACT_BYTE_THRESHOLD = 800 * 1024;
+const SNAPSHOT_HARD_BYTE_LIMIT = 920 * 1024;
 const POLL_ACTIVE_INTERVAL_MS = 1500;
 const POLL_IDLE_INTERVAL_MS = 15000;
 const POLL_EVENT_DEBOUNCE_MS = 200;
@@ -896,6 +899,7 @@ const MIME_TYPES = {
 const startTime = Date.now();
 let swarmTitle = 'Swarm Visualiser';
 let activeClients = new Set();
+const sseClientCleanups = new Map();
 const seenEventSignatures = new Set();
 
 const members = [
@@ -990,8 +994,48 @@ function registerOrUpdateMember(m) {
   return memberObj;
 }
 
-function getSnapshot() {
+function trimProjectForCompact(proj, { maxFiles = 80, maxPosts = 100, maxActivities = 100, maxMembers = 100 } = {}) {
+  if (!proj || typeof proj !== 'object') return proj;
+  const trimmedFiles = {};
+  if (proj.worktreeFiles && typeof proj.worktreeFiles === 'object') {
+    for (const [wtId, info] of Object.entries(proj.worktreeFiles)) {
+      if (info && typeof info === 'object' && Array.isArray(info.files)) {
+        trimmedFiles[wtId] = {
+          ...info,
+          files: info.files.slice(0, maxFiles),
+          truncated: info.files.length > maxFiles || Boolean(info.truncated)
+        };
+      } else {
+        trimmedFiles[wtId] = info;
+      }
+    }
+  }
   return {
+    ...proj,
+    worktreeFiles: trimmedFiles,
+    members: Array.isArray(proj.members)
+      ? proj.members.slice(0, maxMembers).map(m => ({
+          ...m,
+          scope: typeof m?.scope === 'string' && m.scope.length > 160 ? truncateText(m.scope, 160) : m?.scope
+        }))
+      : [],
+    posts: Array.isArray(proj.posts)
+      ? proj.posts.slice(-maxPosts).map(p => ({
+          ...p,
+          text: typeof p?.text === 'string' && p.text.length > 1000 ? truncateText(p.text, 1000) : p?.text
+        }))
+      : [],
+    activities: Array.isArray(proj.activities)
+      ? proj.activities.slice(-maxActivities).map(a => ({
+          ...a,
+          cmd: typeof a?.cmd === 'string' && a.cmd.length > 260 ? truncateText(a.cmd, 260) : a?.cmd
+        }))
+      : []
+  };
+}
+
+function getSnapshot({ compact = false, aggressive = false } = {}) {
+  const base = {
     type: 'snapshot',
     title: swarmTitle,
     startTime,
@@ -1012,6 +1056,64 @@ function getSnapshot() {
     hostApiTarget: '1.7-1.9',
     timestamp: Date.now()
   };
+
+  if (!compact) return base;
+
+  const postCap = aggressive ? 40 : 150;
+  const actCap = aggressive ? 40 : 150;
+  const memberCap = aggressive ? 80 : 150;
+  const textCap = aggressive ? 400 : 1000;
+  const cmdCap = aggressive ? 140 : 260;
+
+  return {
+    ...base,
+    compact: true,
+    members: members.slice(-memberCap).map(m => ({
+      ...m,
+      scope: typeof m?.scope === 'string' && m.scope.length > 180 ? truncateText(m.scope, 180) : m?.scope
+    })),
+    posts: posts.slice(-postCap).map(p => ({
+      ...p,
+      text: typeof p?.text === 'string' && p.text.length > textCap ? truncateText(p.text, textCap) : p?.text
+    })),
+    activities: activities.slice(-actCap).map(a => ({
+      ...a,
+      cmd: typeof a?.cmd === 'string' && a.cmd.length > cmdCap ? truncateText(a.cmd, cmdCap) : a?.cmd
+    })),
+    terminals: terminals.map(t => ({
+      ...t,
+      preview: typeof t?.preview === 'string' && t.preview.length > 160 ? truncateText(t.preview, 160) : t?.preview
+    })),
+    processes: [],
+    orcaProjects: orcaProjects.map(proj =>
+      trimProjectForCompact(
+        proj,
+        aggressive
+          ? { maxFiles: 20, maxPosts: 30, maxActivities: 30, maxMembers: 50 }
+          : { maxFiles: 80, maxPosts: 100, maxActivities: 100, maxMembers: 100 }
+      )
+    )
+  };
+}
+
+function buildSnapshotPayload({ forceCompact = false } = {}) {
+  let payload = getSnapshot({ compact: forceCompact });
+  let json = JSON.stringify(payload);
+  let compacted = forceCompact;
+
+  if (!forceCompact && Buffer.byteLength(json, 'utf8') > SNAPSHOT_COMPACT_BYTE_THRESHOLD) {
+    payload = getSnapshot({ compact: true });
+    json = JSON.stringify(payload);
+    compacted = true;
+  }
+
+  if (Buffer.byteLength(json, 'utf8') > SNAPSHOT_HARD_BYTE_LIMIT) {
+    payload = getSnapshot({ compact: true, aggressive: true });
+    json = JSON.stringify(payload);
+    compacted = true;
+  }
+
+  return { payload, json, compacted };
 }
 
 // Broadcast SSE event to all connected clients
@@ -1019,11 +1121,19 @@ export function broadcast(eventType, data) {
   const safeEventType = String(eventType || 'message').replace(/[\r\n\0]+/g, '').slice(0, 64) || 'message';
   const payload = typeof data === 'string' ? data.replace(/[\r\n\0]+/g, ' ') : JSON.stringify(data);
   const msg = `event: ${safeEventType}\ndata: ${payload}\n\n`;
-  for (const client of activeClients) {
+  for (const client of [...activeClients]) {
+    if (!client || client.writableEnded || client.destroyed) {
+      const cleanup = sseClientCleanups.get(client);
+      if (cleanup) cleanup();
+      else activeClients.delete(client);
+      continue;
+    }
     try {
       client.write(msg);
     } catch {
-      activeClients.delete(client);
+      const cleanup = sseClientCleanups.get(client);
+      if (cleanup) cleanup();
+      else activeClients.delete(client);
     }
   }
 }
@@ -2526,23 +2636,29 @@ function sendJson(res, statusCode, payload) {
 
 function readJsonBody(req, res, maxBytes = 1024 * 1024) {
   return new Promise(resolve => {
-    let body = '';
+    const chunks = [];
+    let totalBytes = 0;
     let settled = false;
     req.on('data', chunk => {
       if (settled) return;
-      body += chunk;
-      if (body.length > maxBytes) {
+      const buf = typeof chunk === 'string' ? Buffer.from(chunk, 'utf8') : chunk;
+      totalBytes += buf.length;
+      if (totalBytes > maxBytes) {
         settled = true;
+        req.pause();
         sendJson(res, 413, { ok: false, error: 'Payload too large' });
         req.destroy();
         resolve({ ok: false, handled: true });
+        return;
       }
+      chunks.push(buf);
     });
     req.on('end', () => {
       if (settled) return;
       settled = true;
       try {
-        const parsed = JSON.parse(body || '{}');
+        const raw = Buffer.concat(chunks).toString('utf8');
+        const parsed = JSON.parse(raw || '{}');
         if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
           sendJson(res, 400, { ok: false, error: 'JSON object body required' });
           resolve({ ok: false, handled: true });
@@ -2676,7 +2792,13 @@ async function handleRequest(req, res) {
     return;
   }
 
-  const parsedUrl = new URL(req.url, `http://127.0.0.1:${expectedPort}`);
+  let parsedUrl;
+  try {
+    parsedUrl = new URL(req.url || '/', `http://127.0.0.1:${expectedPort}`);
+  } catch {
+    sendJson(res, 400, { ok: false, error: 'Invalid request URL' });
+    return;
+  }
   const pathname = parsedUrl.pathname;
 
   if (req.method === 'GET' && pathname === '/favicon.ico') {
@@ -2692,24 +2814,57 @@ async function handleRequest(req, res) {
       return;
     }
 
+    req.socket?.setNoDelay?.(true);
     res.writeHead(200, {
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache, no-store, no-transform',
-      'Connection': 'keep-alive'
+      'Connection': 'keep-alive',
+      'X-Accel-Buffering': 'no'
     });
+    if (typeof res.flushHeaders === 'function') {
+      res.flushHeaders();
+    }
+
+    let cleanedUp = false;
+    let keepAliveTimer = null;
+    const cleanupSseClient = () => {
+      if (cleanedUp) return;
+      cleanedUp = true;
+      if (keepAliveTimer) {
+        clearInterval(keepAliveTimer);
+        keepAliveTimer = null;
+      }
+      sseClientCleanups.delete(res);
+      activeClients.delete(res);
+      if (activeClients.size === 0 && pollLoopStarted && !pollStopped) {
+        scheduleNextPoll(POLL_IDLE_INTERVAL_MS);
+      }
+    };
+
+    sseClientCleanups.set(res, cleanupSseClient);
 
     // Send immediate initial snapshot
     const snapshot = getSnapshot();
-    res.write(`event: snapshot\ndata: ${JSON.stringify(snapshot)}\n\n`);
+    try {
+      res.write(`event: snapshot\ndata: ${JSON.stringify(snapshot)}\n\n`);
+    } catch {
+      cleanupSseClient();
+      return;
+    }
 
-    // Keepalive ping every 15s
-    const keepAliveTimer = setInterval(() => {
+    // Keepalive comment every ~20s
+    keepAliveTimer = setInterval(() => {
+      if (res.writableEnded || res.destroyed) {
+        cleanupSseClient();
+        return;
+      }
       try {
         res.write(': keepalive\n\n');
       } catch {
-        clearInterval(keepAliveTimer);
+        cleanupSseClient();
       }
-    }, 15000);
+    }, SSE_KEEPALIVE_INTERVAL_MS);
+    if (typeof keepAliveTimer.unref === 'function') keepAliveTimer.unref();
 
     const wasIdle = activeClients.size === 0;
     activeClients.add(res);
@@ -2717,13 +2872,10 @@ async function handleRequest(req, res) {
       triggerImmediatePoll({ minGapMs: 0 });
     }
 
-    req.on('close', () => {
-      clearInterval(keepAliveTimer);
-      activeClients.delete(res);
-      if (activeClients.size === 0 && pollLoopStarted && !pollStopped) {
-        scheduleNextPoll(POLL_IDLE_INTERVAL_MS);
-      }
-    });
+    req.on('close', cleanupSseClient);
+    req.on('aborted', cleanupSseClient);
+    res.on('close', cleanupSseClient);
+    res.on('error', cleanupSseClient);
     return;
   }
 
@@ -2759,16 +2911,14 @@ async function handleRequest(req, res) {
 
   // GET /api/members
   if (req.method === 'GET' && pathname === '/api/members') {
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify(members));
+    sendJson(res, 200, members);
     return;
   }
 
   // GET /api/presets
   if (req.method === 'GET' && pathname === '/api/presets') {
     const presets = discoverAgentPresets();
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ ok: true, presets, count: presets.length }));
+    sendJson(res, 200, { ok: true, presets, count: presets.length });
     return;
   }
 
@@ -3383,14 +3533,23 @@ async function handleRequest(req, res) {
 
   // GET /api/snapshot or /api/health
   if (req.method === 'GET' && (pathname === '/api/snapshot' || pathname === '/api/state')) {
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify(getSnapshot()));
+    const compactParam = (parsedUrl.searchParams.get('compact') || '').trim().toLowerCase();
+    const forceCompact = compactParam === '1' || compactParam === 'true';
+    const { json, compacted } = buildSnapshotPayload({ forceCompact });
+    const headers = {
+      'Content-Type': 'application/json',
+      'Cache-Control': 'no-store'
+    };
+    if (compacted) {
+      headers['X-Swarm-Snapshot-Compact'] = '1';
+    }
+    res.writeHead(200, headers);
+    res.end(json);
     return;
   }
 
   if (req.method === 'GET' && (pathname === '/health' || pathname === '/api/health')) {
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({
+    sendJson(res, 200, {
       status: 'ok',
       port: activePort,
       uptime: process.uptime(),
@@ -3400,7 +3559,7 @@ async function handleRequest(req, res) {
       pollMode: activeClients.size > 0 ? 'active' : 'idle',
       workerIpcAvailable: Boolean(readWorkerIpcConfig()),
       hostApiTarget: '1.7-1.9'
-    }));
+    });
     return;
   }
 
@@ -3593,7 +3752,9 @@ export function startServer(port = PORT, host = HOST) {
       clearInterval(tailTimer);
       tailTimer = null;
     }
-    for (const client of activeClients) {
+    for (const client of [...activeClients]) {
+      const cleanup = sseClientCleanups.get(client);
+      if (cleanup) cleanup();
       try {
         client.end();
       } catch {}
