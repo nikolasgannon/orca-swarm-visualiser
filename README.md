@@ -24,7 +24,7 @@ Built for multi-agent coding sessions where keeping Git worktrees tidy and avoid
 orca plugin install nikolasgannon/orca-swarm-visualiser
 ```
 
-Orca prints an explicit `--approve <fingerprint>` command on first install. Re-run with that flag to grant `agent:read`, `workspace:read`, `history:read`, and `agent:launch` access (Orca `1.4.259+`), then run the `Swarm: Open Swarm Visualiser` command in Orca (`Cmd+Shift+P` on macOS, `Ctrl+Shift+P` on Windows/Linux).
+Orca prints an explicit `--approve <fingerprint>` command on first install. Re-run with that flag to grant `agent:read`, `workspace:read`, `history:read`, and `agent:launch` access (Orca `1.4.259+`), then click `Swarm` in Orca's status bar or run `Swarm: Open Swarm Visualiser` in the quick palette (`Cmd+J` on macOS, `Ctrl+J` on Windows/Linux).
 
 ### 2. Local development in Orca
 
@@ -96,7 +96,7 @@ curl -X POST http://127.0.0.1:4319/events \
 
 ## Project structure
 
-- `orca-plugin.json`: Orca v2 plugin manifest (`0.2.0`, `trusted-worker`, `engines.orca >=1.4.259`).
+- `orca-plugin.json`: Orca v2 plugin manifest (`0.2.1`, `trusted-worker`, `engines.orca >=1.4.259`).
 - `tsconfig.json`: TypeScript configuration for Orca plugin typings.
 - `src/worker.ts`: Orca plugin worker (bridge launcher, command registration, event forwarding, and loopback session IPC).
 - `bridge/server.mjs`: Zero-dependency HTTP/SSE bridge, Orca poller, and CLI discovery server.
