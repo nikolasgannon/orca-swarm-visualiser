@@ -749,7 +749,7 @@
     </div>
     <div class="header-right">
       <button type="button" id="openCustomBtn" class="ghost-btn">+ Custom Agent</button>
-      <button type="button" id="relaunchLastBtn" class="icon-btn" title="Relaunch last preset (Mod+Alt+L)" aria-label="Relaunch last preset">
+      <button type="button" id="relaunchLastBtn" class="icon-btn" title="Relaunch last preset (⌘⌥L)" aria-label="Relaunch last preset">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <polyline points="1 4 1 10 7 10"></polyline>
           <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path>
@@ -2923,14 +2923,16 @@ function syncSecondaryPresetSelect(selectEl, placeholder) {
 }
 
 function updateRelaunchButtons() {
+  const isMac = /mac/i.test(navigator.platform || navigator.userAgent || '');
+  const relaunchKey = isMac ? '⌘⌥L' : 'Ctrl+Alt+L';
   const hasLast = Boolean(lastLaunchedPresetId);
   const shortLast = hasLast ? String(lastLaunchedPresetId).replace(/^saved:|^builtin:|^cli:/, '') : '';
   const hdrBtn = document.getElementById('relaunchLastBtn');
   if (hdrBtn) {
     hdrBtn.classList.toggle('has-badge', hasLast);
     const tip = hasLast
-      ? tUi(`Relaunch last helper: ${shortLast} (Mod+Alt+L)`, `Relaunch last preset: ${shortLast} (Mod+Alt+L)`)
-      : tUi('Relaunch last helper (Mod+Alt+L)', 'Relaunch last preset (Mod+Alt+L)');
+      ? tUi(`Relaunch last helper: ${shortLast} (${relaunchKey})`, `Relaunch last preset: ${shortLast} (${relaunchKey})`)
+      : tUi(`Relaunch last helper (${relaunchKey})`, `Relaunch last preset (${relaunchKey})`);
     hdrBtn.title = tip;
     hdrBtn.setAttribute('aria-label', tip);
   }
@@ -2940,7 +2942,7 @@ function updateRelaunchButtons() {
       ? tUi(`Relaunch ${shortLast}`, `Relaunch ${shortLast}`)
       : tUi('Relaunch Last', 'Relaunch Last');
     teamBtn.title = hasLast
-      ? tUi(`Relaunch ${shortLast} in the active folder`, `Relaunch ${shortLast} (Mod+Alt+L)`)
+      ? tUi(`Relaunch ${shortLast} in the active folder`, `Relaunch ${shortLast} (${relaunchKey})`)
       : tUi('No helper launched yet', 'No previously launched preset yet');
   }
   const steerBtn = document.getElementById('steerRelaunchBtn');

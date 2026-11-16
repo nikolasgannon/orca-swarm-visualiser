@@ -24,10 +24,10 @@ On first install, Orca prints an `--approve <fingerprint>` command listing `trus
 Once installed, open the far-right sidebar panel in any of three ways:
 
 - Click **Swarm** in Orca's status bar (displays live active agent counts).
-- Press `Mod+Alt+S` (`Cmd+Alt+S` on macOS, `Ctrl+Alt+S` on Windows and Linux) or run `Swarm: Open Swarm Visualiser` in the quick palette.
+- Press `⌘⌥S` (`Command+Option+S` on macOS, `Ctrl+Alt+S` on Windows and Linux) or run `Swarm: Open Swarm Visualiser` in the quick palette.
 - Click the **Pop Out** icon in the panel header (or run `Swarm: Open Swarm Tab (Full Window)`) to open a full-window Orca tab.
 
-Inside an active workspace, press `Mod+Alt+L` (or run `Swarm: Relaunch last preset`) to relaunch the most recent preset without reopening the modal.
+Inside an active workspace, press `⌘⌥L` (`Command+Option+L` on macOS, `Ctrl+Alt+L` on Windows and Linux) or run `Swarm: Relaunch last preset` to relaunch the most recent preset without reopening the modal.
 
 You can also run the loopback server without Orca installed:
 
@@ -43,7 +43,7 @@ Then open [http://127.0.0.1:4319](http://127.0.0.1:4319) for standalone mode or 
 - **Live workspace and worktree topology graph**: Polls active projects, Git worktrees, subagents, and terminals (`1.5s` when connected, `15s` when idle, plus instant updates from Orca workspace and agent events).
 - **Cross-worktree file collision map**: Flags modified files touched across multiple branches so you can inspect diffs (`POST /api/files/open-diff`) and dispatch review prompts before merging.
 - **Terminal steering, focus, and hand-offs**: Send messages straight to live terminals (`POST /api/terminal/send`), jump to a terminal or worktree (`POST /api/terminal/focus`), or launch follow-up agents in the same or a sibling worktree (`POST /api/handoff`).
-- **Saved presets with effort, flags, and `$ENV_VAR` routing**: Save and launch presets (`POST /api/presets`, `POST /api/presets/launch`) with model selection, `effort` (`low`, `medium`, `high`, `max`), validated `extraArgs`, optional `providerBaseUrl`, and `$ENV_VAR` shell routing. Launch from the header, Team tab, or Steer drawer, or press `Mod+Alt+L` (`POST /api/presets/relaunch-last`).
+- **Saved presets with effort, flags, and `$ENV_VAR` routing**: Save and launch presets (`POST /api/presets`, `POST /api/presets/launch`) with model selection, `effort` (`low`, `medium`, `high`, `max`), validated `extraArgs`, optional `providerBaseUrl`, and `$ENV_VAR` shell routing. Launch from the header, Team tab, or Steer drawer, or press `⌘⌥L` (`Command+Option+L` / `Ctrl+Alt+L`, calling `POST /api/presets/relaunch-last`).
 - **Outcome badges and past session resume**: Displays run outcomes (`completed`, `failed`, `stopped`), lists local past sessions (`GET /api/sessions`), and resumes stopped sessions in one click (`POST /api/sessions/resume`).
 - **Simple and Dev modes**: Toggle between plain-English labels (`Simple`) and Git/CLI terminology (`Dev`) for narrow sidebars.
 - **Standalone loopback API and hook feed**: Local HTTP/SSE server on `127.0.0.1:4319` (`POST /events`) and `~/.orca-swarm/events.jsonl` tailing (`hooks/swarm-hook.mjs`), plus live model/quota discovery (`GET /api/models`) and `@mention` dispatch (`POST /api/dispatch-mentions`).
