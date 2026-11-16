@@ -388,8 +388,42 @@
     /* Modal */
     .modal-backdrop { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.35); display: none; align-items: center; justify-content: center; z-index: 30; }
     .modal-backdrop.open { display: flex; }
-    .modal { width: 430px; max-width: 94vw; background: var(--bg); border: 1px solid var(--border-strong); border-radius: 12px; padding: 16px; box-shadow: var(--shadow); display: flex; flex-direction: column; gap: 10px; }
+    .modal { width: 430px; max-width: 94vw; max-height: 92vh; overflow-y: auto; background: var(--bg); border: 1px solid var(--border-strong); border-radius: 12px; padding: 16px; box-shadow: var(--shadow); display: flex; flex-direction: column; gap: 10px; }
     .modal h3 { margin: 0; font-size: 14px; font-weight: 600; }
+    .launch-details {
+      border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px;
+      background: var(--surface); display: flex; flex-direction: column; gap: 8px;
+    }
+    .launch-details summary {
+      cursor: pointer; font-size: 12px; font-weight: 600; color: var(--text-2);
+      list-style: none; display: flex; align-items: center; justify-content: space-between; gap: 6px;
+      user-select: none;
+    }
+    .launch-details summary::-webkit-details-marker { display: none; }
+    .launch-details[open] summary { padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+    .field-note { font-size: 11px; color: var(--muted); line-height: 1.4; margin-top: 3px; word-break: break-word; }
+    .presets-panel {
+      margin-bottom: 10px; padding: 10px; border: 1px solid var(--border);
+      border-radius: 9px; background: var(--surface); display: flex; flex-direction: column; gap: 8px;
+    }
+    .presets-panel-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; flex-wrap: wrap; }
+    .presets-panel-title { font-size: 11.5px; font-weight: 600; color: var(--text); display: inline-flex; align-items: center; gap: 6px; }
+    .presets-quick-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; min-width: 0; }
+    .presets-quick-row select {
+      flex: 1 1 140px; min-width: 0; max-width: 100%; background: var(--bg); color: var(--text);
+      border: 1px solid var(--border); border-radius: 7px; padding: 5px 8px; font-size: 12px;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .preset-cards { display: flex; flex-direction: column; gap: 6px; }
+    .preset-card {
+      display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap;
+      padding: 7px 9px; border: 1px solid var(--border); border-radius: 7px; background: var(--bg);
+    }
+    .preset-card:hover { border-color: var(--border-strong); }
+    .preset-card-main { min-width: 0; flex: 1 1 150px; display: flex; flex-direction: column; gap: 2px; }
+    .preset-card-title { font-size: 12px; font-weight: 600; color: var(--text); display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
+    .preset-card-meta { font-family: var(--mono); font-size: 10.5px; color: var(--muted); word-break: break-word; }
+    .preset-card-actions { display: flex; align-items: center; gap: 5px; flex-shrink: 0; }
     .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
     .row2 > .field, .field { min-width: 0; }
     .field label { display: block; font-size: 11.5px; color: var(--muted); margin-bottom: 4px; font-weight: 500; }
@@ -701,6 +735,8 @@
       .session-meta { word-break: break-word; }
       .spc-head > div { flex-wrap: wrap; }
       #spcRoute { min-width: 0; word-break: break-word; }
+      .modal { padding: 12px; gap: 8px; }
+      .modal-foot { flex-wrap: wrap; }
     }
   </style>
 </head>
@@ -713,6 +749,13 @@
     </div>
     <div class="header-right">
       <button type="button" id="openCustomBtn" class="ghost-btn">+ Custom Agent</button>
+      <button type="button" id="relaunchLastBtn" class="icon-btn" title="Relaunch last preset (Mod+Alt+L)" aria-label="Relaunch last preset">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <polyline points="1 4 1 10 7 10"></polyline>
+          <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path>
+        </svg>
+        <span class="settings-dot" aria-hidden="true"></span>
+      </button>
       <button type="button" id="liveBtn" class="live-indicator"><span class="live-dot"></span><span id="liveText">Live</span></button>
       <button type="button" id="popOutBtn" class="icon-btn" title="Open in full Orca tab" aria-label="Open in full Orca tab" hidden>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -846,6 +889,7 @@
       </div>
       <div id="membersBanner" class="status-banner" style="margin:0 16px 8px;"></div>
       <div id="membersScroll" class="members-scroll">
+        <div id="presetsPanel" class="presets-panel"></div>
         <div id="membersList"></div>
         <div id="sessionsSection" class="sessions-section"></div>
       </div>
@@ -1004,13 +1048,46 @@
         <label id="caBriefLabel" for="caBrief">Initial Coordinator Brief (optional)</label>
         <textarea id="caBrief" rows="2">Benchmark SSE message throughput and latency under 1,000 concurrent listeners.</textarea>
       </div>
+      <details id="caLaunchDetails" class="launch-details">
+        <summary id="caLaunchSummary">
+          <span id="caLaunchSummaryLabel">Launch &amp; Provider Routing</span>
+          <span id="caLaunchSummaryHint" style="font-size:11px; font-weight:400; color:var(--muted);">Optional</span>
+        </summary>
+        <div class="row2">
+          <div class="field">
+            <label id="caEffortLabel" for="caEffort">Reasoning Effort</label>
+            <select id="caEffort">
+              <option value="">Default</option>
+              <option value="low">Low</option>
+              <option value="medium">Medium</option>
+              <option value="high">High</option>
+              <option value="max">Max</option>
+            </select>
+          </div>
+          <div class="field">
+            <label id="caExtraArgsLabel" for="caExtraArgs">Extra CLI Args (optional)</label>
+            <input id="caExtraArgs" type="text" placeholder="e.g. --verbose --max-turns 8" autocomplete="off" spellcheck="false" />
+          </div>
+        </div>
+        <div class="field">
+          <label id="caProviderBaseUrlLabel" for="caProviderBaseUrl">Provider Base URL (optional)</label>
+          <input id="caProviderBaseUrl" type="url" placeholder="e.g. http://127.0.0.1:11434 or https://openrouter.ai/api" autocomplete="off" spellcheck="false" />
+        </div>
+        <div class="field">
+          <label id="caProviderEnvVarLabel" for="caProviderEnvVar">API Key Env Var Name ONLY</label>
+          <input id="caProviderEnvVar" type="text" placeholder="e.g. OPENROUTER_API_KEY" autocomplete="off" spellcheck="false" />
+          <div id="caProviderEnvVarNote" class="field-note">Env var name only. Raw secrets are blocked and never stored.</div>
+        </div>
+      </details>
       <label style="display:flex; align-items:center; gap:6px; font-size:12px; color:var(--muted); cursor:pointer;">
         <input type="checkbox" id="caSavePreset" style="width:auto;" />
         <span id="caSavePresetText">Save as reusable preset (~/.orca-swarm/presets.json)</span>
       </label>
+      <div id="caModalError" class="status-banner err" role="alert"></div>
       <div class="modal-foot">
-        <button class="ghost-btn" id="cancelCustomBtn">Cancel</button>
-        <button class="ghost-btn" id="createCustomBtn" style="background:var(--accent-soft); color:var(--accent-ink); border-color:transparent;">Add to Swarm</button>
+        <button type="button" class="ghost-btn" id="cancelCustomBtn">Cancel</button>
+        <button type="button" class="ghost-btn" id="launchPresetModalBtn">Launch Preset</button>
+        <button type="button" class="ghost-btn" id="createCustomBtn" style="background:var(--accent-soft); color:var(--accent-ink); border-color:transparent;">Add to Swarm</button>
       </div>
     </div>
   </div>
@@ -1066,6 +1143,11 @@
           <div class="drawer-section-title">
             <span id="handoffSectionTitle">Hand Off to Another Agent</span>
             <button type="button" class="mini-btn" id="refreshHandoffModelsBtn" title="Refresh available CLI models and quotas">Refresh</button>
+          </div>
+          <div class="presets-quick-row" id="steerPresetRow">
+            <select id="steerPresetSelect" aria-label="Saved preset"></select>
+            <button type="button" id="steerPresetLaunchBtn" class="mini-btn accent">Launch Preset</button>
+            <button type="button" id="steerRelaunchBtn" class="mini-btn">Relaunch Last</button>
           </div>
           <div class="row2">
             <div class="field">
@@ -2794,6 +2876,8 @@ Object.entries(ICONS).forEach(([key, svg]) => {
 });
 
 let agentPresets = [];
+let lastLaunchedPresetId = null;
+let selectedPresetAgent = '';
 const presetSelectEl = document.getElementById('caPresetSelect');
 const presetHintEl = document.getElementById('presetCountHint');
 
@@ -2801,9 +2885,7 @@ function escOptionHtml(s) {
   return String(s || '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
-function renderPresetOptions() {
-  if (!presetSelectEl) return;
-  const prevVal = presetSelectEl.value || '';
+function buildPresetSelectOptionsHtml(placeholder) {
   const groups = { saved: [], cli: [], builtin: [] };
   for (const p of agentPresets) {
     const cat = groups[p.category] ? p.category : 'cli';
@@ -2812,7 +2894,6 @@ function renderPresetOptions() {
   const labels = isSimpleUi()
     ? { saved: 'Your Saved Helpers', cli: 'AI Tools Found on This Mac', builtin: 'Ready-Made Team Roles' }
     : { saved: 'Saved Presets (~/.orca-swarm/presets.json)', cli: 'Detected CLI Profiles', builtin: 'Built-in Universal Roles' };
-  const placeholder = tUi('Pick a ready-made helper or local AI...', 'Choose saved preset or CLI profile...');
   const html = [`<option value="">${escOptionHtml(placeholder)}</option>`];
   for (const cat of ['saved', 'cli', 'builtin']) {
     if (!groups[cat].length) continue;
@@ -2823,16 +2904,163 @@ function renderPresetOptions() {
     }
     html.push('</optgroup>');
   }
-  presetSelectEl.innerHTML = html.join('');
-  if (prevVal && [...presetSelectEl.options].some(o => o.value === prevVal)) {
-    presetSelectEl.value = prevVal;
+  return { html: html.join(''), groups };
+}
+
+function syncSecondaryPresetSelect(selectEl, placeholder) {
+  if (!selectEl) return;
+  const prevVal = selectEl.value || '';
+  const { html } = buildPresetSelectOptionsHtml(placeholder);
+  selectEl.innerHTML = html;
+  if (prevVal && [...selectEl.options].some(o => o.value === prevVal)) {
+    selectEl.value = prevVal;
+  } else {
+    const preferred = agentPresets.find(p => p.id === lastLaunchedPresetId || p.key === lastLaunchedPresetId)
+      || agentPresets.find(p => p.category === 'saved')
+      || agentPresets[0];
+    if (preferred?.key) selectEl.value = preferred.key;
   }
-  if (presetHintEl) {
-    const cliCount = groups.cli.length + groups.saved.length;
-    presetHintEl.textContent = cliCount
-      ? `(${cliCount} ${tUi('saved/local', 'local')} + ${groups.builtin.length} ${tUi('ready-made', 'built-in')})`
-      : `(${groups.builtin.length} ${tUi('ready-made', 'built-in')})`;
+}
+
+function updateRelaunchButtons() {
+  const hasLast = Boolean(lastLaunchedPresetId);
+  const shortLast = hasLast ? String(lastLaunchedPresetId).replace(/^saved:|^builtin:|^cli:/, '') : '';
+  const hdrBtn = document.getElementById('relaunchLastBtn');
+  if (hdrBtn) {
+    hdrBtn.classList.toggle('has-badge', hasLast);
+    const tip = hasLast
+      ? tUi(`Relaunch last helper: ${shortLast} (Mod+Alt+L)`, `Relaunch last preset: ${shortLast} (Mod+Alt+L)`)
+      : tUi('Relaunch last helper (Mod+Alt+L)', 'Relaunch last preset (Mod+Alt+L)');
+    hdrBtn.title = tip;
+    hdrBtn.setAttribute('aria-label', tip);
   }
+  const teamBtn = document.getElementById('teamRelaunchBtn');
+  if (teamBtn) {
+    teamBtn.textContent = hasLast
+      ? tUi(`Relaunch ${shortLast}`, `Relaunch ${shortLast}`)
+      : tUi('Relaunch Last', 'Relaunch Last');
+    teamBtn.title = hasLast
+      ? tUi(`Relaunch ${shortLast} in the active folder`, `Relaunch ${shortLast} (Mod+Alt+L)`)
+      : tUi('No helper launched yet', 'No previously launched preset yet');
+  }
+  const steerBtn = document.getElementById('steerRelaunchBtn');
+  if (steerBtn) {
+    steerBtn.textContent = hasLast
+      ? tUi(`Relaunch ${shortLast}`, `Relaunch ${shortLast}`)
+      : tUi('Relaunch Last', 'Relaunch Last');
+  }
+}
+
+function renderPresetOptions() {
+  const placeholder = tUi('Pick a ready-made helper or local AI...', 'Choose saved preset or CLI profile...');
+  if (presetSelectEl) {
+    const prevVal = presetSelectEl.value || '';
+    const { html, groups } = buildPresetSelectOptionsHtml(placeholder);
+    presetSelectEl.innerHTML = html;
+    if (prevVal && [...presetSelectEl.options].some(o => o.value === prevVal)) {
+      presetSelectEl.value = prevVal;
+    }
+    if (presetHintEl) {
+      const cliCount = groups.cli.length + groups.saved.length;
+      presetHintEl.textContent = cliCount
+        ? `(${cliCount} ${tUi('saved/local', 'local')} + ${groups.builtin.length} ${tUi('ready-made', 'built-in')})`
+        : `(${groups.builtin.length} ${tUi('ready-made', 'built-in')})`;
+    }
+  }
+  syncSecondaryPresetSelect(document.getElementById('steerPresetSelect'), tUi('Pick a preset to launch...', 'Select preset to launch...'));
+  renderPresetsPanel();
+  updateRelaunchButtons();
+}
+
+function renderPresetsPanel() {
+  const host = document.getElementById('presetsPanel');
+  if (!host) return;
+  const saved = agentPresets.filter(p => p.category === 'saved');
+  const prevQuick = document.getElementById('quickPresetSelect')?.value || '';
+  const { html: optionsHtml } = buildPresetSelectOptionsHtml(tUi('Pick a preset to start...', 'Select preset to launch...'));
+  const titleTxt = tUi('Quick Launch Preset', 'Saved Presets & Quick Launch');
+  const launchTxt = tUi('Start', 'Launch');
+  const editTxt = tUi('Edit', 'Edit');
+  const cardsHtml = saved.length
+    ? `<div class="preset-cards">${saved.map((p) => {
+        const metaParts = [p.model || 'default'];
+        if (p.effort) metaParts.push(`effort:${p.effort}`);
+        if (p.providerEnvVar) metaParts.push(`$${p.providerEnvVar}`);
+        if (p.providerBaseUrl) metaParts.push(p.providerBaseUrl);
+        if (Array.isArray(p.extraArgs) && p.extraArgs.length) metaParts.push(`${p.extraArgs.length} arg${p.extraArgs.length === 1 ? '' : 's'}`);
+        const isLast = Boolean(lastLaunchedPresetId && (p.id === lastLaunchedPresetId || p.key === lastLaunchedPresetId));
+        return `<div class="preset-card">
+          <div class="preset-card-main">
+            <div class="preset-card-title">
+              <span>${escHtml(p.id)}</span>
+              <span class="member-role">${escHtml(p.role || 'Preset')}</span>
+              ${isLast ? `<span class="outcome-badge success">${escHtml(tUi('Last run', 'Last'))}</span>` : ''}
+            </div>
+            <div class="preset-card-meta">${escHtml(metaParts.join(' · '))}</div>
+          </div>
+          <div class="preset-card-actions">
+            <button type="button" class="mini-btn preset-edit-btn" data-preset-key="${escHtml(p.key)}">${escHtml(editTxt)}</button>
+            <button type="button" class="mini-btn accent preset-launch-btn" data-preset-key="${escHtml(p.key)}">${escHtml(launchTxt)}</button>
+          </div>
+        </div>`;
+      }).join('')}</div>`
+    : `<div class="muted-note">${escHtml(tUi('Pick any starter or save your own helper in + Add AI to reuse it with one click.', 'Select a profile above or save one in + Custom Agent for one-click launch.'))}</div>`;
+
+  host.innerHTML = `
+    <div class="presets-panel-head">
+      <div class="presets-panel-title">
+        <span>${escHtml(titleTxt)}</span>
+        <span class="tab-count">${saved.length}</span>
+      </div>
+      <button type="button" id="teamRelaunchBtn" class="mini-btn"></button>
+    </div>
+    <div class="presets-quick-row">
+      <select id="quickPresetSelect" aria-label="${escHtml(titleTxt)}">${optionsHtml}</select>
+      <button type="button" id="quickPresetLaunchBtn" class="mini-btn accent">${escHtml(launchTxt)}</button>
+      <button type="button" id="quickPresetEditBtn" class="mini-btn">${escHtml(editTxt)}</button>
+    </div>
+    ${cardsHtml}
+  `;
+
+  const quickSel = document.getElementById('quickPresetSelect');
+  if (quickSel) {
+    if (prevQuick && [...quickSel.options].some(o => o.value === prevQuick)) {
+      quickSel.value = prevQuick;
+    } else {
+      const preferred = agentPresets.find(p => p.id === lastLaunchedPresetId || p.key === lastLaunchedPresetId)
+        || saved[0]
+        || agentPresets[0];
+      if (preferred?.key) quickSel.value = preferred.key;
+    }
+  }
+
+  document.getElementById('teamRelaunchBtn')?.addEventListener('click', (e) => {
+    relaunchLastPreset({ worktreePath: activeWorktreePath || undefined, btnEl: e.currentTarget, statusFn: setMembersBanner });
+  });
+  document.getElementById('quickPresetLaunchBtn')?.addEventListener('click', (e) => {
+    const key = document.getElementById('quickPresetSelect')?.value || '';
+    if (!key) {
+      setMembersBanner('err', tUi('Choose a preset first.', 'Select a preset first.'));
+      return;
+    }
+    launchPresetByPayload({ presetId: key, worktreePath: activeWorktreePath || undefined, focus: true }, { btnEl: e.currentTarget, statusFn: setMembersBanner });
+  });
+  document.getElementById('quickPresetEditBtn')?.addEventListener('click', () => {
+    const key = document.getElementById('quickPresetSelect')?.value || '';
+    openCustomModalWithPreset(key);
+  });
+  host.querySelectorAll('.preset-launch-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const key = btn.dataset.presetKey || '';
+      if (key) launchPresetByPayload({ presetId: key, worktreePath: activeWorktreePath || undefined, focus: true }, { btnEl: btn, statusFn: setMembersBanner });
+    });
+  });
+  host.querySelectorAll('.preset-edit-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      openCustomModalWithPreset(btn.dataset.presetKey || '');
+    });
+  });
+  updateRelaunchButtons();
 }
 
 async function loadAgentPresets() {
@@ -2840,9 +3068,14 @@ async function loadAgentPresets() {
     const res = await bridgeFetch('/api/presets');
     if (!res.ok) return;
     const data = await res.json();
+    if ('lastLaunchedPresetId' in data) {
+      lastLaunchedPresetId = data.lastLaunchedPresetId || null;
+    }
     if (Array.isArray(data.presets)) {
       agentPresets = data.presets;
       renderPresetOptions();
+    } else {
+      updateRelaunchButtons();
     }
   } catch (err) {
     console.warn('Could not load /api/presets:', err);
@@ -3583,9 +3816,135 @@ async function loadAvailableModels(refresh = false) {
   }
 }
 
+const LITERAL_SECRET_PATTERNS = [
+  /^sk-[a-zA-Z0-9_-]{6,}/,
+  /^AIza[0-9A-Za-z_-]{8,}/,
+  /^gh[pousr]_[A-Za-z0-9_]{8,}/,
+  /^github_pat_[A-Za-z0-9_]{8,}/,
+  /^xox[baprs]-[A-Za-z0-9-]{8,}/,
+  /^AKIA[0-9A-Z]{8,}/,
+  /^ASIA[0-9A-Z]{8,}/,
+  /^(hf|r8|ant|csk|gsk|pplx)-[A-Za-z0-9_-]{8,}/i
+];
+
+function looksLikeSecretClient(raw) {
+  const s = String(raw || '').trim();
+  if (!s) return false;
+  if (LITERAL_SECRET_PATTERNS.some(re => re.test(s))) return true;
+  if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(s)) return true;
+  return false;
+}
+
+function setCustomModalError(msg) {
+  const el = document.getElementById('caModalError');
+  if (!el) return;
+  if (!msg) {
+    el.classList.remove('show');
+    el.textContent = '';
+    return;
+  }
+  el.textContent = msg;
+  el.classList.add('show');
+}
+
+function validatePresetFieldsClient({ effort, extraArgs, providerBaseUrl, providerEnvVar }) {
+  const eff = String(effort || '').trim().toLowerCase();
+  if (eff && !['low', 'medium', 'high', 'max'].includes(eff)) {
+    return tUi('Reasoning effort must be Default, Low, Medium, High, or Max.', 'Invalid reasoning effort value.');
+  }
+
+  const envRaw = String(providerEnvVar || '').trim();
+  if (envRaw) {
+    if (/[\r\n\0\s=]/.test(envRaw) || envRaw.includes('${')) {
+      return tUi(
+        'Enter an environment variable name only (like OPENROUTER_API_KEY). Spaces, "=", and raw secrets are blocked.',
+        'providerEnvVar must be an environment variable name only (no spaces, "=", or literal secrets).'
+      );
+    }
+    const stripped = envRaw.startsWith('$') ? envRaw.slice(1) : envRaw;
+    if (looksLikeSecretClient(stripped)) {
+      return tUi(
+        'Raw API keys are blocked and never stored. Enter the env var name only (e.g. OPENROUTER_API_KEY).',
+        'Literal API keys or secrets are blocked in providerEnvVar. Enter an env var name only (e.g. OPENROUTER_API_KEY).'
+      );
+    }
+    if (stripped.length > 64 || !/^[A-Za-z_][A-Za-z0-9_]{1,63}$/.test(stripped)) {
+      return tUi(
+        'Env var name must use letters, digits, and underscores only (e.g. OPENROUTER_API_KEY). Raw secrets are blocked.',
+        'providerEnvVar must match /^[A-Za-z_][A-Za-z0-9_]{1,63}$/ (env var name only).'
+      );
+    }
+  }
+
+  const urlRaw = String(providerBaseUrl || '').trim();
+  if (urlRaw) {
+    if (/[\u0000-\u001F\u007F\s]/.test(urlRaw)) {
+      return tUi('Provider Base URL cannot contain spaces or control characters.', 'providerBaseUrl contains invalid whitespace or control characters.');
+    }
+    let parsed;
+    try {
+      parsed = new URL(urlRaw);
+    } catch {
+      return tUi('Provider Base URL must be a valid web or local address.', 'providerBaseUrl must be a valid URL.');
+    }
+    if (parsed.username || parsed.password) {
+      return tUi('Provider Base URL cannot include a username or password.', 'providerBaseUrl must not contain embedded credentials.');
+    }
+    if (parsed.hash) {
+      return tUi('Provider Base URL cannot contain a # fragment.', 'providerBaseUrl must not contain a URL fragment.');
+    }
+    if (parsed.protocol === 'http:') {
+      const host = parsed.hostname.toLowerCase();
+      if (host !== 'localhost' && host !== '127.0.0.1' && host !== '::1' && host !== '[::1]') {
+        return tUi('Use https:// for remote URLs (http:// is allowed only for localhost or 127.0.0.1).', 'providerBaseUrl must use https:// (http:// is only allowed for localhost or 127.0.0.1).');
+      }
+    } else if (parsed.protocol !== 'https:') {
+      return tUi('Provider Base URL must start with https:// or local http://.', 'Unsupported URL scheme for providerBaseUrl; only https:// or local http:// is allowed.');
+    }
+  }
+
+  const argsRaw = String(extraArgs || '').trim();
+  if (argsRaw) {
+    if (/[\u0000-\u001F\u007F]/.test(argsRaw) || /[;|&$()<>`\r\n]/.test(argsRaw)) {
+      return tUi('Extra CLI args cannot contain shell symbols like ; | & $ ( ) < >.', 'extraArgs cannot contain control characters or shell metacharacters.');
+    }
+    const tokens = argsRaw.split(/\s+/).filter(Boolean);
+    if (tokens.some(tok => looksLikeSecretClient(tok) || /=sk-[a-zA-Z0-9_-]{6,}/.test(tok))) {
+      return tUi('Do not paste API keys into Extra CLI Args. Use the Env Var Name field instead.', 'Literal secrets are blocked in extraArgs.');
+    }
+  }
+  return '';
+}
+
+function readCustomModalPresetPayload() {
+  const handle = document.getElementById('caHandle').value.trim();
+  const tags = document.getElementById('caTags').value.split(',').map(s => s.trim()).filter(Boolean).map(s => s.startsWith('@') ? s : `@${s}`);
+  const effort = (document.getElementById('caEffort')?.value || '').trim().toLowerCase();
+  const extraArgs = (document.getElementById('caExtraArgs')?.value || '').trim();
+  const providerBaseUrl = (document.getElementById('caProviderBaseUrl')?.value || '').trim();
+  const providerEnvVar = (document.getElementById('caProviderEnvVar')?.value || '').trim();
+  const brief = document.getElementById('caBrief').value;
+  const cfg = {
+    id: handle,
+    role: document.getElementById('caRole').value.trim(),
+    model: caModelCombo.getValue() || 'custom',
+    avatarBg: document.getElementById('caColor').value,
+    icon: selectedIcon,
+    scope: document.getElementById('caScope').value.trim(),
+    tags,
+    ...(selectedPresetAgent ? { agent: selectedPresetAgent } : {}),
+    effort,
+    extraArgs,
+    providerBaseUrl,
+    providerEnvVar
+  };
+  return { cfg, brief };
+}
+
 function applyPresetSelection(key) {
   const preset = agentPresets.find(p => p.key === key);
   if (!preset) return;
+  selectedPresetAgent = preset.agent || '';
   document.getElementById('caHandle').value = preset.id || '@agent';
   document.getElementById('caRole').value = preset.role || 'Agent';
   caModelUserEditedCustom = false;
@@ -3598,11 +3957,117 @@ function applyPresetSelection(key) {
   document.getElementById('caScope').value = preset.scope || '';
   document.getElementById('caTags').value = Array.isArray(preset.tags) ? preset.tags.join(', ') : '';
   document.getElementById('caBrief').value = preset.brief || '';
+  const effortEl = document.getElementById('caEffort');
+  const argsEl = document.getElementById('caExtraArgs');
+  const baseUrlEl = document.getElementById('caProviderBaseUrl');
+  const envVarEl = document.getElementById('caProviderEnvVar');
+  const detailsEl = document.getElementById('caLaunchDetails');
+  if (effortEl) effortEl.value = preset.effort || '';
+  if (argsEl) argsEl.value = Array.isArray(preset.extraArgs) ? preset.extraArgs.join(' ') : (preset.extraArgs || '');
+  if (baseUrlEl) baseUrlEl.value = preset.providerBaseUrl || '';
+  if (envVarEl) envVarEl.value = preset.providerEnvVar || '';
+  if (detailsEl) {
+    detailsEl.open = Boolean(preset.effort || (Array.isArray(preset.extraArgs) ? preset.extraArgs.length : preset.extraArgs) || preset.providerBaseUrl || preset.providerEnvVar);
+  }
+  setCustomModalError('');
+}
+
+function openCustomModalWithPreset(presetKey = '') {
+  closeAllModelCombos();
+  setCustomModalError('');
+  if (presetKey && presetSelectEl) {
+    if ([...presetSelectEl.options].some(o => o.value === presetKey)) {
+      presetSelectEl.value = presetKey;
+    }
+    applyPresetSelection(presetKey);
+  }
+  modal.classList.add('open');
+  loadAgentPresets();
+  loadAvailableModels(false);
+}
+
+async function launchPresetByPayload(payload, { btnEl, statusFn } = {}) {
+  const report = statusFn || showPanelStatusBanner;
+  const orig = btnEl ? btnEl.textContent : '';
+  if (btnEl) {
+    btnEl.disabled = true;
+    if (btnEl.id !== 'relaunchLastBtn') btnEl.textContent = tUi('Starting...', 'Launching...');
+  }
+  try {
+    const res = await bridgeFetch('/api/presets/launch', {
+      method: 'POST',
+      headers: bridgeJsonHeaders(),
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || data.ok === false) {
+      report('err', data.error || tUi(`Could not start preset (HTTP ${res.status}).`, `Preset launch failed (HTTP ${res.status}).`));
+      return { ok: false, data };
+    }
+    if (data.lastLaunchedPresetId) lastLaunchedPresetId = data.lastLaunchedPresetId;
+    else if (data.presetId) lastLaunchedPresetId = data.presetId;
+    updateRelaunchButtons();
+    loadAgentPresets();
+    scheduleSnapshotRefresh(200);
+    const label = data.presetId || data.agent || 'preset';
+    report('ok', tUi(`Started ${label} (${data.agent || 'CLI'}).`, `Launched ${label} via ${data.agent || 'CLI'} (${data.mode || 'local'}).`));
+    return { ok: true, data };
+  } catch (err) {
+    report('err', tUi(`Connection error: ${err?.message || 'network error'}`, `Network error launching preset: ${err?.message || 'network error'}`));
+    return { ok: false, error: err };
+  } finally {
+    if (btnEl) {
+      btnEl.disabled = false;
+      if (btnEl.id !== 'relaunchLastBtn') btnEl.textContent = orig;
+    }
+  }
+}
+
+async function relaunchLastPreset({ worktreePath, btnEl, statusFn } = {}) {
+  const report = statusFn || showPanelStatusBanner;
+  const orig = btnEl ? btnEl.textContent : '';
+  if (btnEl) {
+    btnEl.disabled = true;
+    if (btnEl.id !== 'relaunchLastBtn') btnEl.textContent = tUi('Starting...', 'Launching...');
+  }
+  try {
+    const body = worktreePath ? { worktreePath, focus: true } : { focus: true };
+    const res = await bridgeFetch('/api/presets/relaunch-last', {
+      method: 'POST',
+      headers: bridgeJsonHeaders(),
+      body: JSON.stringify(body)
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || data.ok === false) {
+      if (res.status === 404 && data.code === 'no_last_preset') {
+        report('err', tUi('No helper launched yet. Pick one in Team or + Add AI first.', 'No previously launched preset recorded yet.'));
+      } else {
+        report('err', data.error || tUi(`Could not relaunch preset (HTTP ${res.status}).`, `Relaunch failed (HTTP ${res.status}).`));
+      }
+      return { ok: false, data };
+    }
+    if (data.lastLaunchedPresetId) lastLaunchedPresetId = data.lastLaunchedPresetId;
+    updateRelaunchButtons();
+    loadAgentPresets();
+    scheduleSnapshotRefresh(200);
+    const label = data.presetId || data.agent || 'preset';
+    report('ok', tUi(`Relaunched ${label}.`, `Relaunched ${label} (${data.mode || 'local'}).`));
+    return { ok: true, data };
+  } catch (err) {
+    report('err', tUi(`Connection error: ${err?.message || 'network error'}`, `Network error relaunching preset: ${err?.message || 'network error'}`));
+    return { ok: false, error: err };
+  } finally {
+    if (btnEl) {
+      btnEl.disabled = false;
+      if (btnEl.id !== 'relaunchLastBtn') btnEl.textContent = orig;
+    }
+  }
 }
 
 if (presetSelectEl) {
   presetSelectEl.onchange = () => {
     if (presetSelectEl.value) applyPresetSelection(presetSelectEl.value);
+    else selectedPresetAgent = '';
   };
 }
 const refreshPresetsBtn = document.getElementById('refreshPresetsBtn');
@@ -3618,41 +4083,149 @@ if (refreshPresetsBtn) {
 }
 
 const modal = document.getElementById('customModal');
-document.getElementById('openCustomBtn').onclick = () => {
-  closeAllModelCombos();
-  modal.classList.add('open');
-  loadAgentPresets();
-  loadAvailableModels(false);
-};
+document.getElementById('openCustomBtn').onclick = () => openCustomModalWithPreset('');
 document.getElementById('cancelCustomBtn').onclick = () => {
   caModelCombo.close();
+  setCustomModalError('');
   modal.classList.remove('open');
 };
-document.getElementById('createCustomBtn').onclick = () => {
-  const handle = document.getElementById('caHandle').value.trim();
-  if (!handle) return;
-  const tags = document.getElementById('caTags').value.split(',').map(s => s.trim()).filter(Boolean).map(s => s.startsWith('@') ? s : `@${s}`);
-  const cfg = {
-    id: handle,
-    role: document.getElementById('caRole').value.trim(),
-    model: caModelCombo.getValue() || 'custom',
-    avatarBg: document.getElementById('caColor').value,
-    icon: selectedIcon,
-    scope: document.getElementById('caScope').value.trim(),
-    tags
-  };
-  const brief = document.getElementById('caBrief').value;
-  if (document.getElementById('caSavePreset')?.checked) {
-    bridgeFetch('/api/presets', {
-      method: 'POST',
-      headers: bridgeJsonHeaders(),
-      body: JSON.stringify({ preset: { ...cfg, brief } })
-    }).then(() => loadAgentPresets()).catch(err => console.warn('Could not POST /api/presets:', err));
+
+['caEffort', 'caExtraArgs', 'caProviderBaseUrl', 'caProviderEnvVar'].forEach(id => {
+  document.getElementById(id)?.addEventListener('input', () => {
+    const { cfg } = readCustomModalPresetPayload();
+    const err = validatePresetFieldsClient(cfg);
+    setCustomModalError(err);
+  });
+});
+
+document.getElementById('createCustomBtn').onclick = async () => {
+  const { cfg, brief } = readCustomModalPresetPayload();
+  if (!cfg.id) {
+    setCustomModalError(tUi('Enter a short @name first.', 'Handle is required.'));
+    return;
   }
+  const shouldSave = Boolean(document.getElementById('caSavePreset')?.checked);
+  const hasRouting = Boolean(cfg.effort || cfg.extraArgs || cfg.providerBaseUrl || cfg.providerEnvVar);
+  if (shouldSave || hasRouting) {
+    const clientErr = validatePresetFieldsClient(cfg);
+    if (clientErr) {
+      setCustomModalError(clientErr);
+      return;
+    }
+  }
+  if (shouldSave) {
+    try {
+      const res = await bridgeFetch('/api/presets', {
+        method: 'POST',
+        headers: bridgeJsonHeaders(),
+        body: JSON.stringify({ preset: { ...cfg, brief } })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data.ok === false) {
+        setCustomModalError(data.error || tUi(`Could not save preset (HTTP ${res.status}).`, `Failed to save preset (HTTP ${res.status}).`));
+        return;
+      }
+      await loadAgentPresets();
+    } catch (err) {
+      setCustomModalError(tUi(`Connection error saving preset: ${err?.message || 'network error'}`, `Network error saving preset: ${err?.message || 'network error'}`));
+      return;
+    }
+  }
+  setCustomModalError('');
   registerMember(cfg, brief, true);
   caModelCombo.close();
   modal.classList.remove('open');
 };
+
+document.getElementById('launchPresetModalBtn')?.addEventListener('click', async () => {
+  const { cfg, brief } = readCustomModalPresetPayload();
+  if (!cfg.id && !cfg.model) {
+    setCustomModalError(tUi('Enter a @name or AI brain first.', 'Handle or model is required to launch.'));
+    return;
+  }
+  const clientErr = validatePresetFieldsClient(cfg);
+  if (clientErr) {
+    setCustomModalError(clientErr);
+    return;
+  }
+  const btn = document.getElementById('launchPresetModalBtn');
+  const orig = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = tUi('Starting...', 'Launching...');
+  try {
+    let savedId = '';
+    if (document.getElementById('caSavePreset')?.checked && cfg.id) {
+      const saveRes = await bridgeFetch('/api/presets', {
+        method: 'POST',
+        headers: bridgeJsonHeaders(),
+        body: JSON.stringify({ preset: { ...cfg, brief } })
+      });
+      const saveData = await saveRes.json().catch(() => ({}));
+      if (!saveRes.ok || saveData.ok === false) {
+        setCustomModalError(saveData.error || tUi(`Could not save preset (HTTP ${saveRes.status}).`, `Failed to save preset (HTTP ${saveRes.status}).`));
+        return;
+      }
+      savedId = saveData.preset?.id || cfg.id;
+      await loadAgentPresets();
+    }
+    const launchRes = await bridgeFetch('/api/presets/launch', {
+      method: 'POST',
+      headers: bridgeJsonHeaders(),
+      body: JSON.stringify({
+        ...(savedId ? { presetId: savedId } : {}),
+        preset: { ...cfg, brief },
+        prompt: brief,
+        ...(activeWorktreePath ? { worktreePath: activeWorktreePath } : {}),
+        ...(activeOrcaWorkspaceId || activeOrcaWorktreeId ? { workspaceId: activeOrcaWorkspaceId || activeOrcaWorktreeId } : {}),
+        focus: true
+      })
+    });
+    const launchData = await launchRes.json().catch(() => ({}));
+    if (!launchRes.ok || launchData.ok === false) {
+      setCustomModalError(launchData.error || tUi(`Could not launch preset (HTTP ${launchRes.status}).`, `Launch failed (HTTP ${launchRes.status}).`));
+      return;
+    }
+    if (launchData.lastLaunchedPresetId) lastLaunchedPresetId = launchData.lastLaunchedPresetId;
+    else if (launchData.presetId) lastLaunchedPresetId = launchData.presetId;
+    updateRelaunchButtons();
+    loadAgentPresets();
+    scheduleSnapshotRefresh(200);
+    setCustomModalError('');
+    caModelCombo.close();
+    modal.classList.remove('open');
+    const label = launchData.presetId || cfg.id || launchData.agent || 'preset';
+    showPanelStatusBanner('ok', tUi(`Started ${label} (${launchData.agent || 'CLI'}).`, `Launched ${label} via ${launchData.agent || 'CLI'} (${launchData.mode || 'local'}).`));
+  } catch (err) {
+    setCustomModalError(tUi(`Connection error: ${err?.message || 'network error'}`, `Network error launching preset: ${err?.message || 'network error'}`));
+  } finally {
+    btn.disabled = false;
+    btn.textContent = orig;
+  }
+});
+
+document.getElementById('relaunchLastBtn')?.addEventListener('click', (e) => {
+  relaunchLastPreset({ worktreePath: activeWorktreePath || undefined, btnEl: e.currentTarget, statusFn: showPanelStatusBanner });
+});
+document.getElementById('steerPresetLaunchBtn')?.addEventListener('click', (e) => {
+  const key = document.getElementById('steerPresetSelect')?.value || '';
+  if (!key) {
+    setSteerStatus('err', tUi('Choose a preset first.', 'Select a preset first.'));
+    return;
+  }
+  launchPresetByPayload({
+    presetId: key,
+    ...(currentSteerTarget?.worktreePath ? { worktreePath: currentSteerTarget.worktreePath } : {}),
+    ...(currentSteerTarget?.worktreeId ? { workspaceId: currentSteerTarget.worktreeId } : {}),
+    focus: true
+  }, { btnEl: e.currentTarget, statusFn: setSteerStatus });
+});
+document.getElementById('steerRelaunchBtn')?.addEventListener('click', (e) => {
+  relaunchLastPreset({
+    worktreePath: currentSteerTarget?.worktreePath || activeWorktreePath || undefined,
+    btnEl: e.currentTarget,
+    statusFn: setSteerStatus
+  });
+});
 
 renderCustomModelOptions();
 renderHandoffModelOptions();
@@ -5497,8 +6070,21 @@ function applyUiLanguageMode(nextMode) {
   setText('caScopeLabel', 'What They Own', 'Scope / Duty');
   setText('caTagsLabel', 'Team Tags', 'Group Tags');
   setText('caBriefLabel', 'Starting Instructions (optional)', 'Initial Coordinator Brief (optional)');
+  setText('caLaunchSummaryLabel', 'Advanced Launch & Provider Options', 'Launch & Provider Routing');
+  setText('caLaunchSummaryHint', 'Optional', 'Optional');
+  setText('caEffortLabel', 'Thinking Depth', 'Reasoning Effort');
+  const effortDefaultOpt = document.querySelector('#caEffort option[value=""]');
+  if (effortDefaultOpt) effortDefaultOpt.textContent = tUi('Default', 'Default');
+  setText('caExtraArgsLabel', 'Extra Flags (optional)', 'Extra CLI Args (optional)');
+  setAttr('caExtraArgs', 'placeholder', 'e.g. --verbose', 'e.g. --verbose --max-turns 8');
+  setText('caProviderBaseUrlLabel', 'Custom AI Server URL (optional)', 'Provider Base URL (optional)');
+  setAttr('caProviderBaseUrl', 'placeholder', 'e.g. http://127.0.0.1:11434 or https://openrouter.ai/api', 'e.g. http://127.0.0.1:11434 or https://openrouter.ai/api');
+  setText('caProviderEnvVarLabel', 'API Key Env Var Name ONLY', 'API Key Env Var Name ONLY');
+  setAttr('caProviderEnvVar', 'placeholder', 'e.g. OPENROUTER_API_KEY', 'e.g. OPENROUTER_API_KEY');
+  setText('caProviderEnvVarNote', 'Env var name only (like OPENROUTER_API_KEY). Raw secrets are blocked and never stored.', 'Env var name only. Raw secrets are blocked and never stored.');
   setText('caSavePresetText', 'Save this helper setup to reuse later', 'Save as reusable preset (~/.orca-swarm/presets.json)');
   setText('cancelCustomBtn', 'Cancel', 'Cancel');
+  setText('launchPresetModalBtn', 'Launch AI', 'Launch Preset');
   setText('createCustomBtn', 'Add AI', 'Add to Swarm');
 
   // Steer & Hand Off Drawer
@@ -5516,6 +6102,7 @@ function applyUiLanguageMode(nextMode) {
   setText('steerTerminalFootNote', 'Sends right away only when you click Send.', 'Sends with Enter on explicit click only.');
   setText('steerTerminalSendBtn', 'Send Message', 'Send to Terminal');
   setText('handoffSectionTitle', 'Pass Job to Another AI', 'Hand Off to Another Agent');
+  setText('steerPresetLaunchBtn', 'Start Preset', 'Launch Preset');
   setText('refreshHandoffModelsBtn', 'Refresh', 'Refresh');
   setAttr('refreshHandoffModelsBtn', 'title', 'Reload available AI apps, brains, and limits', 'Refresh available CLI models and quotas');
   setText('handoffTargetAgentLabel', 'AI App', 'Target Agent');

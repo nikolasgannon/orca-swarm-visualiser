@@ -1,113 +1,120 @@
-# Swarm Visualiser for Orca
+# Swarm Visualiser
 
-An open-source add-on for [Orca ADE](https://github.com/stablyai/orca) under an MIT licence. It runs inside Orca's far-right sidebar panel and polls Orca worktrees and terminals to detect active coding agents. It also discovers local agent profiles and presets, streaming live activity to the Orca panel (`bridge.rpc` and `swarm.sse`), a standalone browser tab, and an offline demo mode.
+**Live multi-agent topology, file collision tracking, and secret-free preset routing inside Orca's sidebar.**
 
-Built for multi-agent coding sessions where keeping Git worktrees tidy and avoiding overlapping edits matters.
+[![Orca >=1.4.259](https://img.shields.io/badge/Orca-%3E%3D1.4.259-18181b)](#requirements-and-limits)
+[![Platform](https://img.shields.io/badge/Platform-macOS%20%2F%20Linux%20%2F%20Windows-18181b)](#requirements-and-limits)
+[![Licence: MIT](https://img.shields.io/badge/Licence-MIT-18181b)](#author-and-licence)
+[![Telemetry: None](https://img.shields.io/badge/Telemetry-None-15803d)](#what-it-can-access)
 
-## What it does
+[Install](#install) · [Features](#features) · [How routing works](#how-routing-works) · [What it can access](#what-it-can-access) · [Requirements and limits](#requirements-and-limits) · [Development](#development)
 
-- **Native Orca sidebar panel and Pop Out tab**: Opens in Orca's far-right sidebar from the `Swarm` status bar item (showing live active agent counts) or `Cmd+J` (`Ctrl+J` on Windows/Linux). It matches Orca's light and dark themes automatically and includes a `Pop Out` button in the header to launch a full-window Orca tab.
+![Swarm Visualiser sidebar panel showing live topology, presets, and dispatch command](images/cover.png)
 
-- **Live Orca workspace polling**: Tracks active projects, Git worktrees, subagents, and live terminal sessions, automatically following the workspace focused in Orca. Polls at `1.5s` when browser clients are connected, backs off to `15s` when idle, and refreshes right away on Orca workspace or agent status events.
-- **Outcome badges and session resume**: Displays agent run outcomes (`completed`, `failed`, `stopped`) and session IDs, lists recent past sessions (`GET /api/sessions` via local worker IPC with `orca search` keyword fallback), and resumes stopped sessions in one click (`POST /api/sessions/resume`).
-- **Cross-worktree file collision map**: Inspects modified files per worktree, highlights overlapping edits across branches, and lets you send review prompts or launch a hand-off check.
-- **Direct terminal steering, focus, and hand-offs**: Send prompts straight to live agent terminals, jump to a terminal or workspace in Orca with single-click focus (`POST /api/terminal/focus`), or start a follow-up agent in the same worktree or a new sibling worktree.
-- **Live model and quota discovery**: Discovers locally installed CLI models across Claude, Codex, OpenCode, and Gemini alongside Orca provider quota status through a searchable dropdown picker.
-- **Live mention dispatch**: Tag agents with `@handle` or group tags in the composer to route prompts to live terminals or launch bound worktree agents.
-- **Sidepanel-friendly Simple and Dev modes**: Switch between plain-English labels (`Simple`) and technical Git/CLI terminology (`Dev`) inside the settings menu while keeping the same controls.
-- **Dynamic agent profile discovery**: Scans `~/.claude/agents`, `~/.config/opencode/agent`, `~/.codex/agents`, `~/.agents/agents`, project agent folders, and `~/.orca-swarm/presets.json`.
-- **Standalone HTTP and SSE bridge**: Zero-dependency Node.js server on port `4319` (`GET /api/snapshot`, `GET /api/models`, `GET /api/sessions`, `POST /events`, `POST /api/dispatch-mentions`, `POST /api/handoff`, `POST /api/terminal/send`, `POST /api/terminal/focus`, `POST /api/sessions/resume`), with offline demo mode when Orca is not running.
+## Install
 
-## Quick start
-
-### 1. Install as an Orca extension
+Install from the Orca CLI:
 
 ```bash
 orca plugin install nikolasgannon/orca-swarm-visualiser
 ```
 
-Orca prints an explicit `--approve <fingerprint>` command on first install. Re-run with that flag to grant `agent:read`, `workspace:read`, `history:read`, and `agent:launch` access (Orca `1.4.259+`). Click `Swarm` in Orca's status bar or run `Swarm: Open Swarm Visualiser` in the quick palette (`Cmd+J` on macOS, `Ctrl+J` on Windows/Linux) to open the far-right sidebar panel. Use the `Pop Out` header icon (`Swarm: Open Swarm Tab (Full Window)`) for a full browser tab.
+On first install, Orca prints an `--approve <fingerprint>` command listing `trusted-worker` execution and four capabilities (`agent:read`, `workspace:read`, `history:read`, `agent:launch`). Review that prompt and re-run with `--approve` only if you trust the local source.
 
-### 2. Local development in Orca
+Once installed, open the far-right sidebar panel in any of three ways:
 
-```bash
-orca plugin validate .
-orca plugin dev load .
-```
+- Click **Swarm** in Orca's status bar (displays live active agent counts).
+- Press `Mod+Alt+S` (`Cmd+Alt+S` on macOS, `Ctrl+Alt+S` on Windows and Linux) or run `Swarm: Open Swarm Visualiser` in the quick palette.
+- Click the **Pop Out** icon in the panel header (or run `Swarm: Open Swarm Tab (Full Window)`) to open a full-window Orca tab.
 
-Re-run `dev load` with the printed `--approve` flag, then run `Swarm: Open Swarm Visualiser` to open the native sidebar panel, or `Swarm: Open Swarm Tab (Full Window)` / `orca tab create`:
+Inside an active workspace, press `Mod+Alt+L` (or run `Swarm: Relaunch last preset`) to relaunch the most recent preset without reopening the modal.
 
-```bash
-orca tab create --url http://127.0.0.1:4319
-```
-
-### 3. Standalone browser server
+You can also run the loopback server without Orca installed:
 
 ```bash
-cd orca-swarm-visualiser
 node bridge/server.mjs
 ```
 
-Open [http://127.0.0.1:4319](http://127.0.0.1:4319).
+Then open [http://127.0.0.1:4319](http://127.0.0.1:4319) for standalone mode or offline demo data.
 
-## Event webhook API
+## Features
 
-Scripts, CLI hooks, or agent runners can append lines directly to `~/.orca-swarm/events.jsonl` or post over `127.0.0.1` using the session token in `~/.orca-swarm/bridge.token`.
+- **Native far-right sidebar panel and Pop Out tab**: Runs inside Orca's sidebar over `bridge.rpc` and `swarm.sse` with automatic light/dark theme sync, plus a `Pop Out` button for a full-window tab.
+- **Live workspace and worktree topology graph**: Polls active projects, Git worktrees, subagents, and terminals (`1.5s` when connected, `15s` when idle, plus instant updates from Orca workspace and agent events).
+- **Cross-worktree file collision map**: Flags modified files touched across multiple branches so you can inspect diffs (`POST /api/files/open-diff`) and dispatch review prompts before merging.
+- **Terminal steering, focus, and hand-offs**: Send messages straight to live terminals (`POST /api/terminal/send`), jump to a terminal or worktree (`POST /api/terminal/focus`), or launch follow-up agents in the same or a sibling worktree (`POST /api/handoff`).
+- **Saved presets with effort, flags, and `$ENV_VAR` routing**: Save and launch presets (`POST /api/presets`, `POST /api/presets/launch`) with model selection, `effort` (`low`, `medium`, `high`, `max`), validated `extraArgs`, optional `providerBaseUrl`, and `$ENV_VAR` shell routing. Launch from the header, Team tab, or Steer drawer, or press `Mod+Alt+L` (`POST /api/presets/relaunch-last`).
+- **Outcome badges and past session resume**: Displays run outcomes (`completed`, `failed`, `stopped`), lists local past sessions (`GET /api/sessions`), and resumes stopped sessions in one click (`POST /api/sessions/resume`).
+- **Simple and Dev modes**: Toggle between plain-English labels (`Simple`) and Git/CLI terminology (`Dev`) for narrow sidebars.
+- **Standalone loopback API and hook feed**: Local HTTP/SSE server on `127.0.0.1:4319` (`POST /events`) and `~/.orca-swarm/events.jsonl` tailing (`hooks/swarm-hook.mjs`), plus live model/quota discovery (`GET /api/models`) and `@mention` dispatch (`POST /api/dispatch-mentions`).
 
-### Post a board update
+## How routing works
+
+Swarm Visualiser lets you override an agent's model, reasoning effort, CLI flags, and provider endpoint without storing API keys on disk or passing secrets through Node.js memory.
+
+1. When you launch a preset inside Orca (`POST /api/presets/launch` or `POST /api/presets/relaunch-last`), `bridge/server.mjs` validates every field, persists `lastLaunchedPresetId` to `~/.orca-swarm/presets.json` (`0600`), queues the override via local worker IPC (`POST /ipc/launch/pending`, 15-second TTL), and runs `orca agent launch`.
+2. Orca invokes the plugin's `agent.launch.before` hook in `src/worker.ts`. If a matching queued preset exists within the 15-second window, the hook consumes it once and rewrites `--model`, `--effort`, and `extraArgs` using POSIX single-quoting.
+3. For Anthropic-compatible agents (`claude`, `claude-code`, `anthropic`, `opencode`, `aider`, `cline`, `roo`), it can prepend `ANTHROPIC_BASE_URL` (validated `https://` or local `http://127.0.0.1` / `localhost` / `[::1]` with no embedded credentials) and `ANTHROPIC_API_KEY="$VAR_NAME"`.
+
+### The `$ENV_VAR` token rule
+
+In the `API Key Env Var Name ONLY` field (`providerEnvVar`), enter only an environment variable name such as `OPENROUTER_API_KEY` (matching `/^[A-Za-z_][A-Za-z0-9_]{1,63}$/`, stripping an optional single leading `$`).
+
+- Raw API keys and literals (such as `sk-*`, `AIza*`, `ghp_*`, `xoxb-*`, `=`, spaces, or `${...}`) are rejected immediately with HTTP `400` (`code: "invalid_preset"`) and are never saved or logged.
+- Neither `bridge/server.mjs` nor `src/worker.ts` reads `process.env[VAR_NAME]` into JavaScript. Instead, the spawned terminal shell expands `"$VAR_NAME"` locally on your machine.
+- Outside Orca, `POST /api/presets/launch` uses `orca agent launch` when no hook-only overrides apply, or spawns the validated CLI binary via `execFile` (`shell: false`, zero shell interpolation).
+
+## What it can access
+
+**Nothing leaves your machine.** Swarm Visualiser sends zero data to the author, Stably, or any external analytics, telemetry, or CDN service.
+
+| Capability | Purpose in Swarm Visualiser | Scope boundary |
+|---|---|---|
+| `agent:read` | Reads active agent states, subagent trees, and terminal status for the topology graph and status bar counter. | Read-only local Orca state. |
+| `workspace:read` | Reads open project and Git worktree paths and follows the workspace focused in Orca. | Read-only local workspace metadata. |
+| `history:read` | Lists recent local agent sessions (`agent.listSessions`) and resumes stopped sessions (`agent.resume`). | Local Orca-supported histories only. |
+| `agent:launch` | Launches presets and hand-offs (`orca agent launch`) and rewrites flags via `agent.launch.before`. | Local CLI launches only. |
+
+The manifest also declares `execution: "trusted-worker"` so `src/worker.ts` can spawn the local `bridge/server.mjs` process, register the `agent.launch.before` hook, and call `orca tab create` when popping out a tab.
+
+**Local-only boundary**
+
+- **Read-only profile and model discovery**: Scans `~/.claude/agents`, `~/.config/opencode/agent`, `~/.opencode/agent`, `~/.codex/agents`, `~/.agents/agents`, and project `.claude/agents`, `.opencode/agent`, `.codex/agents` folders for Markdown profiles. Reads local model configs and caches in `~/.claude/settings.json`, `~/.claude/cache/model-catalog`, `~/.codex/config.toml`, `~/.codex/models_cache.json`, `~/.config/opencode/opencode.json`, `~/.opencode/opencode.json`, and `~/.gemini/settings.json`.
+- **State written on disk**: Stored solely under `~/.orca-swarm` (mode `0700`) in `presets.json`, `events.jsonl`, `bridge.token`, and `worker-ipc.json` (all mode `0600`).
+- **Loopback networking only**: Binds strictly to `127.0.0.1:4319` (`ORCA_SWARM_HOST=127.0.0.1`) and an ephemeral `127.0.0.1` worker IPC port, blocking foreign `Host`, `Origin`, and cross-site browser requests and requiring `X-Orca-Swarm-Token` on all `POST` endpoints.
+- **Zero telemetry and zero external assets**: No outbound network calls, no analytics, and no remote fonts or CDN tags (`zeroTelemetry: true` in `GET /api/health`). See [SECURITY.md](./SECURITY.md) for the full threat model and redaction rules.
+
+## Requirements and limits
+
+- **Runtime**: Requires `Orca >=1.4.259` and a local Node.js runtime (`node`) for `bridge/server.mjs` and `hooks/swarm-hook.mjs`.
+- **Loopback by default**: Binds to `127.0.0.1` only. Overriding `ORCA_SWARM_HOST` to a non-loopback address is unsupported for security reasons because it exposes local terminal steering.
+- **Payload compaction**: To stay inside Orca's `1 MiB` panel RPC limit, `src/worker.ts` replaces SSE frames over `180 KiB` with an `orca_update_ping` refresh prompt and caps `bridge.rpc` responses at `960 KiB`. `bridge/server.mjs` auto-compacts `/api/snapshot` responses above `800 KiB`.
+- **History scope**: `history:read` queries local agent histories supported by Orca (`agent.listSessions` with `orca search` fallback). It does not read remote SSH transcripts or non-Orca IDE histories.
+- **Startup session restores**: Sessions restored automatically when Orca starts are not routed through `agent.launch.before`.
+- **Terminal and workspace focus**: Terminal focus calls `orca terminal switch` and worktree focus falls back to `orca worktree activate` when host RPC focus is unavailable. Folder workspaces cannot be activated via the Orca CLI.
+- **Hook TTL**: Pending preset launch overrides expire after `15s` and are consumed at most once by the matching `agent.launch.before` event.
+
+## Development
+
+Load the local checkout into Orca for development:
 
 ```bash
-TOKEN=$(cat ~/.orca-swarm/bridge.token)
-curl -X POST http://127.0.0.1:4319/events \
-  -H "Content-Type: application/json" \
-  -H "X-Orca-Swarm-Token: $TOKEN" \
-  -d '{
-    "type": "swarm:post",
-    "from": "@coder",
-    "to": ["@verifier"],
-    "text": "Completed authentication middleware update. Tests passing."
-  }'
+orca plugin validate .
+orca plugin check . --json
+orca plugin dev load .
 ```
 
-### Log a tool event
+Run the security and preset test suite and type check:
 
 ```bash
-TOKEN=$(cat ~/.orca-swarm/bridge.token)
-curl -X POST http://127.0.0.1:4319/events \
-  -H "Content-Type: application/json" \
-  -H "X-Orca-Swarm-Token: $TOKEN" \
-  -d '{
-    "type": "swarm:activity",
-    "activity": {
-      "id": "act-101",
-      "agentId": "@coder",
-      "tool": "git.commit",
-      "cmd": "git commit -m \"feat: auth middleware\"",
-      "status": "ok",
-      "durationSec": 2
-    }
-  }'
+node --test tests/presets-and-security.test.mjs
+npx tsc --noEmit
 ```
 
-## Security model
-
-- **Loopback binding**: Listens on `127.0.0.1` only by default (`ORCA_SWARM_HOST=127.0.0.1`), blocking LAN access.
-- **DNS rebinding and CORS checks**: Rejects foreign `Host`, `Origin`, and cross-site browser requests with no wildcard CORS.
-- **Per-run token and redaction**: Requires a `0600` `X-Orca-Swarm-Token` on all `POST` endpoints, scrubs common API keys and credentials from hook and event logs, and runs zero external fonts or telemetry.
-- **Threat model and disclosure**: Read [SECURITY.md](./SECURITY.md) for security controls and vulnerability reporting.
-
-## Project structure
-
-- `orca-plugin.json`: Orca v2 plugin manifest (`0.3.0`, `trusted-worker`, `contributes.panels` sidebar entry, `engines.orca >=1.4.259`).
-- `tsconfig.json`: TypeScript configuration for Orca plugin typings.
-- `src/worker.ts`: Orca plugin worker (bridge launcher, `bridge.rpc` / `swarm.openTab` panel handlers, `swarm.sse` event relay, status bar updates, command registration, and loopback session IPC).
-- `bridge/server.mjs`: Zero-dependency HTTP/SSE bridge, `/api/snapshot` compaction, Orca poller, and CLI discovery server.
-- `bridge/public/index.html`: Single-file canvas UI with Orca native sidebar panel adapter (`window.orca.plugin`), standalone HTTP mode, Simple/Dev language modes, theme sync, and demo mode.
-- `hooks/swarm-hook.mjs`: CLI tool hook for external agent logging.
-- `SECURITY.md`: Security architecture, user safeguards, and vulnerability disclosure policy.
+Note that `npx tsc --noEmit` expects `typescript` and `@types/node` (or an installed `tsc` binary with Orca host types in `.orca/types`).
 
 ## Author and licence
 
-Maintained by [Nikolas Gannon](https://www.nikolasgannon.com.au) (`hello@nikolasgannon.com.au`). Questions and bug reports live in [GitHub Issues](https://github.com/nikolasgannon/orca-swarm-visualiser/issues).
+Community plugin maintained by Nikolas Gannon under the [MIT Licence](./LICENSE). Not affiliated with Stably.
 
-Released under the [MIT Licence](./LICENSE).
+No runtime requests are made to author domains. The contact address in [SECURITY.md](./SECURITY.md) is strictly for private vulnerability reports, and general bug reports belong in [GitHub Issues](https://github.com/nikolasgannon/orca-swarm-visualiser/issues).

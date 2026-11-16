@@ -1,5 +1,5 @@
 import type { OrcaWorkerApi, Disposable, HostCallError, HostErrorCode, JsonValue } from 'orca/worker';
-import type { HostParams } from 'orca/host';
+import type { HostParams, PluginHooks } from 'orca/host';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -25,6 +25,16 @@ const SSE_INITIAL_BACKOFF_MS = 500;
 const SSE_MAX_BACKOFF_MS = 15_000;
 const BRIDGE_RPC_TIMEOUT_MS = 25_000;
 const MAX_FIELD_LEN = 2000;
+const DEFAULT_LAUNCH_TTL_MS = 15_000;
+const MAX_PENDING_LAUNCHES = 20;
+
+const ALLOWED_LAUNCH_EFFORTS = new Set(['', 'low', 'medium', 'high', 'max']);
+const ENV_VAR_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]{1,63}$/;
+const LITERAL_SECRET_RE = /^(?:sk-[A-Za-z0-9_-]|sk_live_|sk_test_|AIza|ghp_|gho_|ghu_|ghs_|ghr_|github_pat_|glpat-|xox[abprs]-|AKIA|ASIA|xai-|hf_|gsk_|npm_|eyJ[A-Za-z0-9_-]{8,}\.)/;
+const SHELL_META_RE = /[;|&$`()<>\r\n\\]/;
+const CONTROL_CHAR_RE = /[\x00-\x1f\x7f]/;
+const EXTRA_ARGS_CONTROL_RE = /[\x00-\x08\x0b-\x1f\x7f]/;
+const ANTHROPIC_COMPATIBLE_AGENTS = new Set(['claude', 'claude-code', 'anthropic', 'opencode', 'aider', 'cline', 'roo']);
 
 const ALLOWED_GET_QUERY_PARAMS: Record<string, ReadonlySet<string>> = {
   '/api/health': new Set(),
@@ -47,12 +57,31 @@ const ALLOWED_POST_PATHS = new Set<string>([
   '/api/custom-agents',
   '/api/members',
   '/api/presets',
+  '/api/presets/launch',
+  '/api/presets/relaunch-last',
   '/events'
 ]);
 
 type ResumeParams = HostParams<'agent.resume'>;
 type ResumableAgent = ResumeParams['agent'];
 type ListSessionsParams = Exclude<HostParams<'agent.listSessions'>, undefined>;
+type AgentLaunchBeforeEvent = PluginHooks['agent.launch.before']['event'];
+
+export type PendingPresetLaunch = {
+  id: string;
+  presetId: string;
+  agent: string;
+  workspaceId: string;
+  model: string;
+  effort: string;
+  extraArgs: string[];
+  providerBaseUrl: string;
+  providerEnvVar: string;
+  createdAt: number;
+  expiresAt: number;
+};
+
+const pendingLaunchQueue: PendingPresetLaunch[] = [];
 
 const RESUMABLE_AGENTS = new Set<ResumableAgent>([
   'claude',
@@ -472,6 +501,382 @@ function validateIdentifier(value: unknown): string | null {
   return trimmed;
 }
 
+export function posixSingleQuote(value: string): string {
+  const str = String(value ?? '');
+  if (str.includes('\0')) {
+    throw createHostError('invalid_params', 'Null byte is not permitted in command arguments');
+  }
+  return `'${str.replace(/'/g, "'\"'\"'")}'`;
+}
+
+function looksLikeLiteralSecret(raw: string): boolean {
+  const trimmed = raw.trim();
+  if (!trimmed) return false;
+  if (LITERAL_SECRET_RE.test(trimmed)) return true;
+  if (/\bsk-[A-Za-z0-9_-]{4,}/i.test(trimmed)) return true;
+  return false;
+}
+
+function validateSafeProviderBaseUrl(raw: unknown): string {
+  if (raw === undefined || raw === null) return '';
+  if (typeof raw !== 'string') {
+    throw createHostError('invalid_params', 'providerBaseUrl must be a string');
+  }
+  const trimmed = raw.trim();
+  if (!trimmed) return '';
+  if (trimmed.length > 512 || CONTROL_CHAR_RE.test(trimmed) || /\s/.test(trimmed) || trimmed.includes('\\')) {
+    throw createHostError('invalid_params', 'providerBaseUrl contains invalid characters');
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    throw createHostError('invalid_params', 'providerBaseUrl must be a valid URL');
+  }
+  if (parsed.username !== '' || parsed.password !== '' || /^[a-z]+:\/\/[^/]*@/i.test(trimmed)) {
+    throw createHostError('invalid_params', 'providerBaseUrl must not contain credentials');
+  }
+  const host = parsed.hostname.toLowerCase();
+  if (!host) {
+    throw createHostError('invalid_params', 'providerBaseUrl must include a hostname');
+  }
+  if (parsed.protocol === 'https:') {
+    // Allowed
+  } else if (parsed.protocol === 'http:') {
+    if (host !== '127.0.0.1' && host !== 'localhost' && host !== '::1' && host !== '[::1]') {
+      throw createHostError('invalid_params', 'providerBaseUrl http:// is only allowed for localhost or 127.0.0.1');
+    }
+  } else {
+    throw createHostError('invalid_params', 'Unsupported URL scheme for providerBaseUrl');
+  }
+  if (parsed.hash) {
+    throw createHostError('invalid_params', 'providerBaseUrl must not contain a URL fragment');
+  }
+  return parsed.toString().replace(/\/+$/, '');
+}
+
+function validateSafeProviderEnvVar(raw: unknown): string {
+  if (raw === undefined || raw === null) return '';
+  if (typeof raw !== 'string') {
+    throw createHostError('invalid_params', 'providerEnvVar must be an environment variable name');
+  }
+  const trimmed = raw.trim();
+  if (!trimmed) return '';
+  if (CONTROL_CHAR_RE.test(trimmed) || /\s/.test(trimmed) || trimmed.includes('=') || looksLikeLiteralSecret(trimmed)) {
+    throw createHostError('invalid_params', 'providerEnvVar must be an environment variable name only, never a literal secret');
+  }
+  const stripped = trimmed.startsWith('$') ? trimmed.slice(1) : trimmed;
+  if (!stripped || stripped.length > 64 || looksLikeLiteralSecret(stripped) || !ENV_VAR_NAME_RE.test(stripped)) {
+    throw createHostError('invalid_params', 'providerEnvVar must match /^[A-Za-z_][A-Za-z0-9_]{1,63}$/');
+  }
+  return stripped;
+}
+
+function validateSafeExtraArgs(raw: unknown): string[] {
+  if (raw === undefined || raw === null || raw === '') return [];
+  if (!Array.isArray(raw)) {
+    throw createHostError('invalid_params', 'extraArgs must be an array of strings');
+  }
+  if (raw.length > 24) {
+    throw createHostError('invalid_params', 'extraArgs may contain at most 24 arguments');
+  }
+  const out: string[] = [];
+  let totalLen = 0;
+  for (const item of raw) {
+    if (typeof item !== 'string') {
+      throw createHostError('invalid_params', 'extraArgs items must be strings');
+    }
+    const trimmed = item.trim();
+    if (!trimmed) continue;
+    if (
+      trimmed.length > 256 ||
+      EXTRA_ARGS_CONTROL_RE.test(item) ||
+      SHELL_META_RE.test(item) ||
+      looksLikeLiteralSecret(trimmed)
+    ) {
+      throw createHostError('invalid_params', 'extraArgs contains unsafe characters or disallowed values');
+    }
+    totalLen += trimmed.length;
+    if (totalLen > 1024) {
+      throw createHostError('invalid_params', 'extraArgs exceeds 1024 character limit');
+    }
+    out.push(trimmed);
+  }
+  return out;
+}
+
+export function queuePendingLaunch(input: Record<string, unknown>, now = Date.now()): PendingPresetLaunch {
+  const rawAgent = typeof input.agent === 'string' ? input.agent.trim().toLowerCase() : '';
+  if (rawAgent && !/^[a-z0-9][a-z0-9._-]{0,63}$/i.test(rawAgent)) {
+    throw createHostError('invalid_params', 'Invalid agent identifier');
+  }
+
+  let workspaceId = '';
+  if (input.workspaceId !== undefined && input.workspaceId !== null && input.workspaceId !== '') {
+    const validWid = validateIdentifier(input.workspaceId);
+    if (!validWid) {
+      throw createHostError('invalid_params', 'Invalid workspaceId');
+    }
+    workspaceId = validWid;
+  }
+
+  const presetId = typeof input.presetId === 'string' ? input.presetId.trim().slice(0, 256) : '';
+  const model = typeof input.model === 'string' ? input.model.trim() : '';
+  if (model && (CONTROL_CHAR_RE.test(model) || SHELL_META_RE.test(model) || looksLikeLiteralSecret(model) || !/^[a-z0-9][a-z0-9._:/-]{0,127}$/i.test(model))) {
+    throw createHostError('invalid_params', 'Invalid model identifier');
+  }
+
+  const effort = typeof input.effort === 'string' ? input.effort.trim().toLowerCase() : '';
+  if (!ALLOWED_LAUNCH_EFFORTS.has(effort)) {
+    throw createHostError('invalid_params', 'Invalid effort value');
+  }
+
+  const extraArgs = validateSafeExtraArgs(input.extraArgs);
+  const providerBaseUrl = validateSafeProviderBaseUrl(input.providerBaseUrl);
+  const providerEnvVar = validateSafeProviderEnvVar(input.providerEnvVar);
+
+  const rawTtl = typeof input.ttlMs === 'number' && Number.isFinite(input.ttlMs)
+    ? Math.round(input.ttlMs)
+    : DEFAULT_LAUNCH_TTL_MS;
+  const ttlMs = Math.max(1000, Math.min(DEFAULT_LAUNCH_TTL_MS, rawTtl));
+
+  pruneExpiredPendingLaunches(now);
+  while (pendingLaunchQueue.length >= MAX_PENDING_LAUNCHES) {
+    pendingLaunchQueue.shift();
+  }
+
+  const entry: PendingPresetLaunch = {
+    id: crypto.randomUUID(),
+    presetId,
+    agent: rawAgent,
+    workspaceId,
+    model,
+    effort,
+    extraArgs,
+    providerBaseUrl,
+    providerEnvVar,
+    createdAt: now,
+    expiresAt: now + ttlMs
+  };
+  pendingLaunchQueue.push(entry);
+  return entry;
+}
+
+export function pruneExpiredPendingLaunches(now = Date.now()): void {
+  for (let i = pendingLaunchQueue.length - 1; i >= 0; i--) {
+    if (now > pendingLaunchQueue[i].expiresAt) {
+      pendingLaunchQueue.splice(i, 1);
+    }
+  }
+}
+
+export function consumeMatchingPendingLaunch(
+  event: Pick<AgentLaunchBeforeEvent, 'agent' | 'workspaceId'>,
+  now = Date.now()
+): PendingPresetLaunch | null {
+  pruneExpiredPendingLaunches(now);
+  const eventAgent = String(event.agent || '').trim().toLowerCase();
+  const eventWid = event.workspaceId ? String(event.workspaceId).trim() : '';
+
+  const idx = pendingLaunchQueue.findIndex((item) => {
+    if (item.agent && eventAgent && item.agent !== eventAgent) return false;
+    if (item.workspaceId && eventWid && item.workspaceId !== eventWid) return false;
+    return true;
+  });
+  if (idx === -1) return null;
+  const [matched] = pendingLaunchQueue.splice(idx, 1);
+  return matched;
+}
+
+export function clearPendingLaunches(): void {
+  pendingLaunchQueue.length = 0;
+}
+
+type ShellTokenSpan = {
+  raw: string;
+  unquoted: string;
+  start: number;
+  end: number;
+};
+
+function tokenizeShellCommandSpans(cmd: string): ShellTokenSpan[] {
+  const spans: ShellTokenSpan[] = [];
+  let i = 0;
+  const len = cmd.length;
+
+  while (i < len) {
+    while (i < len && (cmd[i] === ' ' || cmd[i] === '\t')) i++;
+    if (i >= len) break;
+
+    const start = i;
+    let unquoted = '';
+
+    while (i < len && cmd[i] !== ' ' && cmd[i] !== '\t') {
+      const ch = cmd[i];
+      if (ch === "'") {
+        i++;
+        while (i < len && cmd[i] !== "'") {
+          unquoted += cmd[i];
+          i++;
+        }
+        if (i < len && cmd[i] === "'") i++;
+      } else if (ch === '"') {
+        i++;
+        while (i < len && cmd[i] !== '"') {
+          if (cmd[i] === '\\' && i + 1 < len && (cmd[i + 1] === '"' || cmd[i + 1] === '\\' || cmd[i + 1] === '$' || cmd[i + 1] === '`')) {
+            unquoted += cmd[i + 1];
+            i += 2;
+          } else {
+            unquoted += cmd[i];
+            i++;
+          }
+        }
+        if (i < len && cmd[i] === '"') i++;
+      } else if (ch === '\\' && i + 1 < len) {
+        unquoted += cmd[i + 1];
+        i += 2;
+      } else {
+        unquoted += ch;
+        i++;
+      }
+    }
+
+    spans.push({
+      raw: cmd.slice(start, i),
+      unquoted,
+      start,
+      end: i
+    });
+  }
+
+  return spans;
+}
+
+export function rewriteAgentLaunchEvent(
+  event: AgentLaunchBeforeEvent,
+  override: Pick<PendingPresetLaunch, 'agent' | 'model' | 'effort' | 'extraArgs' | 'providerBaseUrl' | 'providerEnvVar'>
+): AgentLaunchBeforeEvent {
+  const rawCommand = typeof event.command === 'string' ? event.command.trim() : '';
+  if (!rawCommand) return event;
+
+  const spans = tokenizeShellCommandSpans(rawCommand);
+  if (spans.length === 0) return event;
+
+  let cmdIdx = 0;
+  while (cmdIdx < spans.length) {
+    const u = spans[cmdIdx].unquoted;
+    if (u === 'exec' || /^[A-Za-z_][A-Za-z0-9_]*=/.test(u)) {
+      cmdIdx++;
+    } else {
+      break;
+    }
+  }
+  if (cmdIdx >= spans.length) {
+    cmdIdx = 0;
+  }
+
+  let doubleDashIdx = -1;
+  for (let i = cmdIdx + 1; i < spans.length; i++) {
+    if (spans[i].unquoted === '--') {
+      doubleDashIdx = i;
+      break;
+    }
+  }
+
+  const scanLimit = doubleDashIdx >= 0 ? doubleDashIdx : spans.length;
+  const cleanModel = override.model ? String(override.model).trim() : '';
+  const cleanEffort = override.effort ? String(override.effort).trim().toLowerCase() : '';
+  const cleanExtraArgs = Array.isArray(override.extraArgs) ? override.extraArgs : [];
+
+  let hasModelFlag = false;
+  let hasEffortFlag = false;
+  const replaceMap = new Map<number, { skipNext: boolean; replacement: string }>();
+
+  for (let i = cmdIdx + 1; i < scanLimit; i++) {
+    const u = spans[i].unquoted;
+    if (cleanModel) {
+      if (u === '--model' && i + 1 < scanLimit) {
+        hasModelFlag = true;
+        replaceMap.set(i, { skipNext: true, replacement: `--model ${posixSingleQuote(cleanModel)}` });
+        i++;
+        continue;
+      }
+      if (u.startsWith('--model=')) {
+        hasModelFlag = true;
+        replaceMap.set(i, { skipNext: false, replacement: `--model ${posixSingleQuote(cleanModel)}` });
+        continue;
+      }
+    }
+    if (cleanEffort) {
+      if (u === '--effort' && i + 1 < scanLimit) {
+        hasEffortFlag = true;
+        replaceMap.set(i, { skipNext: true, replacement: `--effort ${posixSingleQuote(cleanEffort)}` });
+        i++;
+        continue;
+      }
+      if (u.startsWith('--effort=')) {
+        hasEffortFlag = true;
+        replaceMap.set(i, { skipNext: false, replacement: `--effort ${posixSingleQuote(cleanEffort)}` });
+        continue;
+      }
+    }
+  }
+
+  const insertParts: string[] = [];
+  if (cleanModel && !hasModelFlag) {
+    insertParts.push(`--model ${posixSingleQuote(cleanModel)}`);
+  }
+  if (cleanEffort && !hasEffortFlag) {
+    insertParts.push(`--effort ${posixSingleQuote(cleanEffort)}`);
+  }
+  for (const arg of cleanExtraArgs) {
+    insertParts.push(posixSingleQuote(arg));
+  }
+
+  const outTokens: string[] = [];
+  for (let i = 0; i <= cmdIdx; i++) {
+    outTokens.push(spans[i].raw);
+  }
+  if (doubleDashIdx === -1 && insertParts.length > 0) {
+    outTokens.push(...insertParts);
+  }
+  for (let i = cmdIdx + 1; i < spans.length; i++) {
+    if (i === doubleDashIdx && insertParts.length > 0) {
+      outTokens.push(...insertParts);
+    }
+    const rep = replaceMap.get(i);
+    if (rep) {
+      outTokens.push(rep.replacement);
+      if (rep.skipNext) i++;
+      continue;
+    }
+    outTokens.push(spans[i].raw);
+  }
+
+  const effectiveAgent = String(event.agent || override.agent || '').trim().toLowerCase();
+  const envPrefixParts: string[] = [];
+  if (ANTHROPIC_COMPATIBLE_AGENTS.has(effectiveAgent)) {
+    const cleanBaseUrl = validateSafeProviderBaseUrl(override.providerBaseUrl);
+    const cleanEnvVar = validateSafeProviderEnvVar(override.providerEnvVar);
+    if (cleanBaseUrl) {
+      envPrefixParts.push(`ANTHROPIC_BASE_URL=${posixSingleQuote(cleanBaseUrl)}`);
+    }
+    if (cleanEnvVar) {
+      // Never read process.env[cleanEnvVar] into JS; expand inside the spawned POSIX shell.
+      envPrefixParts.push('ANTHROPIC_API_KEY="$' + cleanEnvVar + '"');
+    }
+  }
+
+  const nextCommand = envPrefixParts.length > 0
+    ? `${envPrefixParts.join(' ')} ${outTokens.join(' ')}`
+    : outTokens.join(' ');
+
+  return {
+    ...event,
+    command: nextCommand
+  };
+}
+
 function mapHostErrorStatus(err: unknown): { status: number; code: string; message: string } {
   const hostErr = err as Partial<HostCallError> | null;
   const code = typeof hostErr?.code === 'string' ? hostErr.code : 'action_failed';
@@ -572,9 +977,27 @@ function startWorkerIpc(orca: OrcaWorkerApi): Promise<void> {
         methods: {
           readContext: orca.host.has('workspace.readContext'),
           listSessions: orca.host.has('agent.listSessions'),
-          resume: orca.host.has('agent.resume')
+          resume: orca.host.has('agent.resume'),
+          launchPending: Boolean(orca.hooks && typeof orca.hooks.on === 'function')
         }
       });
+      return;
+    }
+
+    if (req.method === 'POST' && pathname === '/ipc/launch/pending') {
+      const bodyRes = await readIpcJsonBody(req, res);
+      if (!bodyRes.ok) return;
+      try {
+        const queued = queuePendingLaunch(bodyRes.data);
+        sendIpcJson(res, 200, {
+          ok: true,
+          id: queued.id,
+          expiresAt: queued.expiresAt
+        });
+      } catch (err) {
+        const mapped = mapHostErrorStatus(err);
+        sendIpcJson(res, mapped.status, { ok: false, code: mapped.code, error: mapped.message });
+      }
       return;
     }
 
@@ -1678,6 +2101,55 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
     return await openBrowserTab(orca, port, ctx?.signal);
   });
   disposables.push(cmdOpenTabSub);
+
+  // 7. Register 'swarm-visualiser.relaunchLast' command
+  const cmdRelaunchLastSub = orca.commands.register('swarm-visualiser.relaunchLast', async (_args, ctx) => {
+    await startServerIfNotRunning(port, ctx?.signal);
+    try {
+      const res = await callBridgeHttp(port, 'POST', '/api/presets/relaunch-last', '{}', ctx?.signal);
+      if (!res.ok) {
+        const errMsg =
+          (res.data && typeof res.data === 'object' && !Array.isArray(res.data) && typeof res.data.error === 'string'
+            ? res.data.error
+            : null) || `Relaunch last preset failed (HTTP ${res.status})`;
+        if (orca.host.has('notifications.show')) {
+          void orca.host.call('notifications.show', { title: 'Swarm Visualiser', body: errMsg }).catch(() => {});
+        }
+        return { ok: false, status: res.status, error: errMsg };
+      }
+      return res.data;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Relaunch last preset failed';
+      if (orca.host.has('notifications.show')) {
+        void orca.host.call('notifications.show', { title: 'Swarm Visualiser', body: msg }).catch(() => {});
+      }
+      return { ok: false, error: msg };
+    }
+  });
+  disposables.push(cmdRelaunchLastSub);
+
+  // 8. Register 'agent.launch.before' hook (guarded safely, timeout-safe, never throws)
+  if (orca.hooks && typeof orca.hooks.on === 'function') {
+    const launchBeforeSub = orca.hooks.on('agent.launch.before', (event, next) => {
+      try {
+        const match = consumeMatchingPendingLaunch(event);
+        if (!match) {
+          return next();
+        }
+        const rewritten = rewriteAgentLaunchEvent(event, match);
+        return next(rewritten);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error('[orca-swarm-visualiser] agent.launch.before hook error:', msg);
+        try {
+          return next();
+        } catch {
+          return;
+        }
+      }
+    });
+    disposables.push(launchBeforeSub);
+  }
 }
 
 /**
@@ -1685,6 +2157,7 @@ export default async function activate(orca: OrcaWorkerApi): Promise<void> {
  */
 export async function deactivate(): Promise<void> {
   stopBridgeSseClient();
+  clearPendingLaunches();
   knownAgentStates.clear();
   lastStatusBarSignature = '';
   startServerPromise = null;

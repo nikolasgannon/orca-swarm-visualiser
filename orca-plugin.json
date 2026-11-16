@@ -3,8 +3,12 @@
   "manifestVersion": 2,
   "id": "swarm-visualiser",
   "name": "Swarm Visualiser",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Real-time visualiser and control bridge for multi-agent swarms in Orca.",
+  "author": {
+    "name": "Nikolas Gannon",
+    "url": "https://github.com/nikolasgannon"
+  },
   "icon": "images/icon.png",
   "cover": {
     "path": "images/cover.png",
@@ -52,6 +56,28 @@
       {
         "id": "swarm-visualiser.openTab",
         "title": "Swarm: Open Swarm Tab (Full Window)"
+      },
+      {
+        "id": "swarm-visualiser.relaunchLast",
+        "title": "Swarm: Relaunch last preset",
+        "when": "workspace"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "swarm-visualiser.open",
+        "key": "Mod+Alt+S",
+        "when": "global"
+      },
+      {
+        "command": "swarm-visualiser.relaunchLast",
+        "key": "Mod+Alt+L",
+        "when": "workspace"
+      }
+    ],
+    "hooks": [
+      {
+        "event": "agent.launch.before"
       }
     ],
     "statusBarItems": [

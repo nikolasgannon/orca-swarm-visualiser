@@ -96,12 +96,29 @@ export const AGENT_TYPE_META = {
 };
 
 const BUILTIN_AGENT_PRESETS = [
-  { key: 'builtin:architect', id: '@architect', name: 'Architect', role: 'Architecture & Design Planner', model: 'claude-sonnet-4-6', avatarBg: '#2563eb', icon: 'cpu', scope: 'Design system boundaries, API contracts, and migration plans', tags: ['@design', '@plan'], brief: 'Review repository structure and propose the implementation plan before edits begin.', source: 'Built-in Template', category: 'builtin' },
-  { key: 'builtin:coder', id: '@coder', name: 'Coder', role: 'Implementation Engineer', model: 'deepseek-v4.1-flash', avatarBg: '#d97706', icon: 'terminal', scope: 'Write focused code changes inside assigned workspace scope', tags: ['@dev', '@build'], brief: 'Implement the approved changes in the target files and report diffs and checks run.', source: 'Built-in Template', category: 'builtin' },
-  { key: 'builtin:verifier', id: '@verifier', name: 'Verifier', role: 'QA & Test Verifier', model: 'codex', avatarBg: '#059669', icon: 'shield', scope: 'Run tests, linters, typechecks, and browser verification', tags: ['@qa', '@test'], brief: 'Verify all modified flows end-to-end and report exact pass or failure evidence.', source: 'Built-in Template', category: 'builtin' },
-  { key: 'builtin:security', id: '@security', name: 'Security', role: 'Security Reviewer', model: 'claude-sonnet-4-6', avatarBg: '#dc2626', icon: 'radar', scope: 'Audit auth, secret handling, input validation, and sandboxes', tags: ['@sec', '@audit'], brief: 'Audit changed files for secret leaks, injection vectors, and boundary bypasses.', source: 'Built-in Template', category: 'builtin' },
-  { key: 'builtin:researcher', id: '@researcher', name: 'Researcher', role: 'Codebase Researcher', model: 'gemini-3.8-flash', avatarBg: '#7c3aed', icon: 'search', scope: 'Map dependencies, existing helpers, and documentation', tags: ['@docs', '@search'], brief: 'Inspect related modules and summarise conventions before editing.', source: 'Built-in Template', category: 'builtin' }
+  { key: 'builtin:architect', id: '@architect', name: 'Architect', role: 'Architecture & Design Planner', model: 'claude-sonnet-4-6', avatarBg: '#2563eb', icon: 'cpu', scope: 'Design system boundaries, API contracts, and migration plans', tags: ['@design', '@plan'], brief: 'Review repository structure and propose the implementation plan before edits begin.', source: 'Built-in Template', category: 'builtin', effort: '', extraArgs: [], providerBaseUrl: '', providerEnvVar: '' },
+  { key: 'builtin:coder', id: '@coder', name: 'Coder', role: 'Implementation Engineer', model: 'deepseek-v4.1-flash', avatarBg: '#d97706', icon: 'terminal', scope: 'Write focused code changes inside assigned workspace scope', tags: ['@dev', '@build'], brief: 'Implement the approved changes in the target files and report diffs and checks run.', source: 'Built-in Template', category: 'builtin', effort: '', extraArgs: [], providerBaseUrl: '', providerEnvVar: '' },
+  { key: 'builtin:verifier', id: '@verifier', name: 'Verifier', role: 'QA & Test Verifier', model: 'codex', avatarBg: '#059669', icon: 'shield', scope: 'Run tests, linters, typechecks, and browser verification', tags: ['@qa', '@test'], brief: 'Verify all modified flows end-to-end and report exact pass or failure evidence.', source: 'Built-in Template', category: 'builtin', effort: '', extraArgs: [], providerBaseUrl: '', providerEnvVar: '' },
+  { key: 'builtin:security', id: '@security', name: 'Security', role: 'Security Reviewer', model: 'claude-sonnet-4-6', avatarBg: '#dc2626', icon: 'radar', scope: 'Audit auth, secret handling, input validation, and sandboxes', tags: ['@sec', '@audit'], brief: 'Audit changed files for secret leaks, injection vectors, and boundary bypasses.', source: 'Built-in Template', category: 'builtin', effort: '', extraArgs: [], providerBaseUrl: '', providerEnvVar: '' },
+  { key: 'builtin:researcher', id: '@researcher', name: 'Researcher', role: 'Codebase Researcher', model: 'gemini-3.8-flash', avatarBg: '#7c3aed', icon: 'search', scope: 'Map dependencies, existing helpers, and documentation', tags: ['@docs', '@search'], brief: 'Inspect related modules and summarise conventions before editing.', source: 'Built-in Template', category: 'builtin', effort: '', extraArgs: [], providerBaseUrl: '', providerEnvVar: '' }
 ];
+
+export const ALLOWED_EFFORTS = new Set(['', 'low', 'medium', 'high', 'max']);
+const ENV_VAR_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]{1,63}$/;
+const LITERAL_SECRET_RE = /^(?:sk-[A-Za-z0-9_-]|sk_live_|sk_test_|AIza|ghp_|gho_|ghu_|ghs_|ghr_|github_pat_|glpat-|xox[abprs]-|AKIA|ASIA|xai-|hf_|gsk_|npm_|eyJ[A-Za-z0-9_-]{8,}\.)/;
+const SHELL_META_RE = /[;|&$`()<>\r\n\\]/;
+const CONTROL_CHAR_RE = /[\x00-\x1f\x7f]/;
+const EXTRA_ARGS_CONTROL_RE = /[\x00-\x08\x0b-\x1f\x7f]/;
+const ANTHROPIC_COMPATIBLE_AGENTS = new Set(['claude', 'claude-code', 'anthropic', 'opencode', 'aider', 'cline', 'roo']);
+
+export class PresetValidationError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = 'PresetValidationError';
+    this.statusCode = 400;
+    this.code = 'invalid_preset';
+  }
+}
 
 function stripQuotes(val) {
   const s = String(val || '').trim();
@@ -116,11 +133,236 @@ function normalizeHandle(rawId, fallback = 'agent') {
   return `@${clean || fallback}`;
 }
 
-function normalisePresetRecord(raw, defaults = {}) {
+export function looksLikeLiteralSecret(raw) {
+  if (typeof raw !== 'string') return false;
+  const trimmed = raw.trim();
+  if (!trimmed) return false;
+  if (LITERAL_SECRET_RE.test(trimmed)) return true;
+  if (/\bsk-[A-Za-z0-9_-]{4,}/i.test(trimmed)) return true;
+  return false;
+}
+
+export function validatePresetEffort(raw) {
+  if (raw === undefined || raw === null || raw === '') return '';
+  if (typeof raw !== 'string') {
+    throw new PresetValidationError('Invalid effort: must be empty or one of low, medium, high, max');
+  }
+  const clean = raw.trim().toLowerCase();
+  if (!ALLOWED_EFFORTS.has(clean)) {
+    throw new PresetValidationError('Invalid effort: must be empty or one of low, medium, high, max');
+  }
+  return clean;
+}
+
+export function tokenizeAndValidateExtraArgs(raw) {
+  if (raw === undefined || raw === null || raw === '') return [];
+
+  let tokens = [];
+  if (Array.isArray(raw)) {
+    if (raw.length > 24) {
+      throw new PresetValidationError('extraArgs may contain at most 24 arguments');
+    }
+    for (const item of raw) {
+      if (typeof item !== 'string') {
+        throw new PresetValidationError('extraArgs array entries must be strings');
+      }
+      const trimmed = item.trim();
+      if (!trimmed) continue;
+      if (EXTRA_ARGS_CONTROL_RE.test(item) || SHELL_META_RE.test(item)) {
+        throw new PresetValidationError('extraArgs contains disallowed control characters or shell metacharacters');
+      }
+      tokens.push(trimmed);
+    }
+  } else if (typeof raw === 'string') {
+    if (EXTRA_ARGS_CONTROL_RE.test(raw) || SHELL_META_RE.test(raw)) {
+      throw new PresetValidationError('extraArgs contains disallowed control characters or shell metacharacters');
+    }
+    if (raw.length > 1024) {
+      throw new PresetValidationError('extraArgs exceeds 1024 character limit');
+    }
+
+    let current = '';
+    let inToken = false;
+    let quoteChar = '';
+    for (let i = 0; i < raw.length; i++) {
+      const ch = raw[i];
+      if (quoteChar) {
+        if (ch === quoteChar) {
+          quoteChar = '';
+        } else {
+          current += ch;
+        }
+        continue;
+      }
+      if (ch === '"' || ch === "'") {
+        quoteChar = ch;
+        inToken = true;
+        continue;
+      }
+      if (ch === ' ' || ch === '\t') {
+        if (inToken) {
+          if (current) tokens.push(current);
+          current = '';
+          inToken = false;
+        }
+        continue;
+      }
+      current += ch;
+      inToken = true;
+    }
+    if (quoteChar) {
+      throw new PresetValidationError('Unclosed quote in extraArgs');
+    }
+    if (inToken && current) {
+      tokens.push(current);
+    }
+  } else {
+    throw new PresetValidationError('extraArgs must be a string or an array of strings');
+  }
+
+  if (tokens.length > 24) {
+    throw new PresetValidationError('extraArgs may contain at most 24 arguments');
+  }
+
+  let totalLen = 0;
+  for (const tok of tokens) {
+    if (tok.length > 256) {
+      throw new PresetValidationError('Each extraArgs token must be 256 characters or fewer');
+    }
+    totalLen += tok.length;
+    if (totalLen > 1024) {
+      throw new PresetValidationError('extraArgs exceeds 1024 character limit');
+    }
+    if (EXTRA_ARGS_CONTROL_RE.test(tok) || SHELL_META_RE.test(tok)) {
+      throw new PresetValidationError('extraArgs contains disallowed control characters or shell metacharacters');
+    }
+    if (looksLikeLiteralSecret(tok)) {
+      throw new PresetValidationError('Literal API keys or secrets are not permitted in extraArgs');
+    }
+  }
+
+  return tokens;
+}
+
+export function validateProviderBaseUrl(raw) {
+  if (raw === undefined || raw === null) return '';
+  if (typeof raw !== 'string') {
+    throw new PresetValidationError('providerBaseUrl must be a string URL');
+  }
+  const trimmed = raw.trim();
+  if (!trimmed) return '';
+  if (trimmed.length > 512 || CONTROL_CHAR_RE.test(trimmed) || /\s/.test(trimmed) || trimmed.includes('\\')) {
+    throw new PresetValidationError('providerBaseUrl contains invalid whitespace or control characters');
+  }
+
+  let parsed;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    throw new PresetValidationError('providerBaseUrl must be a valid URL');
+  }
+
+  if (parsed.username !== '' || parsed.password !== '' || /^[a-z]+:\/\/[^/]*@/i.test(trimmed)) {
+    throw new PresetValidationError('providerBaseUrl must not contain embedded credentials');
+  }
+
+  const host = parsed.hostname.toLowerCase();
+  if (!host) {
+    throw new PresetValidationError('providerBaseUrl must include a hostname');
+  }
+
+  if (parsed.protocol === 'https:') {
+    // Allowed
+  } else if (parsed.protocol === 'http:') {
+    if (host !== '127.0.0.1' && host !== 'localhost' && host !== '::1' && host !== '[::1]') {
+      throw new PresetValidationError('providerBaseUrl must use https:// (http:// is only permitted for localhost or 127.0.0.1)');
+    }
+  } else {
+    throw new PresetValidationError('Unsupported URL scheme for providerBaseUrl; only https:// or local http:// is allowed');
+  }
+
+  if (parsed.hash) {
+    throw new PresetValidationError('providerBaseUrl must not contain a URL fragment');
+  }
+
+  return parsed.toString().replace(/\/+$/, '');
+}
+
+export function validateProviderEnvVar(raw) {
+  if (raw === undefined || raw === null) return '';
+  if (typeof raw !== 'string') {
+    throw new PresetValidationError('providerEnvVar must be an environment variable name string');
+  }
+  const trimmed = raw.trim();
+  if (!trimmed) return '';
+
+  if (CONTROL_CHAR_RE.test(trimmed) || /\s/.test(trimmed) || trimmed.includes('=')) {
+    throw new PresetValidationError('providerEnvVar must be an environment variable name only (no spaces, control characters, or "=" assignments)');
+  }
+
+  if (looksLikeLiteralSecret(trimmed)) {
+    throw new PresetValidationError('Literal API keys or secrets are blocked in providerEnvVar. Enter an environment variable name only (e.g. OPENROUTER_API_KEY).');
+  }
+
+  const stripped = trimmed.startsWith('$') ? trimmed.slice(1) : trimmed;
+  if (!stripped || stripped.startsWith('$') || stripped.includes('{') || stripped.includes('}')) {
+    throw new PresetValidationError('providerEnvVar must be a bare environment variable name (e.g. OPENROUTER_API_KEY)');
+  }
+
+  if (looksLikeLiteralSecret(stripped)) {
+    throw new PresetValidationError('Literal API keys or secrets are blocked in providerEnvVar. Enter an environment variable name only (e.g. OPENROUTER_API_KEY).');
+  }
+
+  if (stripped.length > 64) {
+    throw new PresetValidationError('providerEnvVar exceeds 64 character environment variable name limit');
+  }
+
+  if (!ENV_VAR_NAME_RE.test(stripped)) {
+    throw new PresetValidationError('providerEnvVar must match /^[A-Za-z_][A-Za-z0-9_]{1,63}$/ (environment variable name only)');
+  }
+
+  return stripped;
+}
+
+function safeOrFallback(fn, fallback) {
+  try {
+    return fn();
+  } catch {
+    return fallback;
+  }
+}
+
+export function normalisePresetRecord(raw, defaults = {}) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new PresetValidationError('Preset must be a JSON object');
+  }
+  const strict = defaults.strict !== false;
   const baseId = raw.id || raw.handle || raw.name || defaults.id || 'agent';
   const id = normalizeHandle(baseId);
   const model = stripQuotes(raw.model || defaults.model || '');
-  const detected = detectAgentType(`${model} ${defaults.providerHint || ''} ${id} ${raw.role || ''} ${raw.description || ''}`);
+  if (strict && looksLikeLiteralSecret(model)) {
+    throw new PresetValidationError('Literal API keys or secrets are not permitted in model');
+  }
+
+  const rawAgent = stripQuotes(raw.agent || defaults.agent || '').toLowerCase();
+  if (strict && rawAgent && !/^[a-z0-9][a-z0-9._-]{0,63}$/i.test(rawAgent)) {
+    throw new PresetValidationError('Invalid preset agent identifier');
+  }
+
+  const effort = strict
+    ? validatePresetEffort(raw.effort)
+    : safeOrFallback(() => validatePresetEffort(raw.effort), '');
+  const extraArgs = strict
+    ? tokenizeAndValidateExtraArgs(raw.extraArgs)
+    : safeOrFallback(() => tokenizeAndValidateExtraArgs(raw.extraArgs), []);
+  const providerBaseUrl = strict
+    ? validateProviderBaseUrl(raw.providerBaseUrl)
+    : safeOrFallback(() => validateProviderBaseUrl(raw.providerBaseUrl), '');
+  const providerEnvVar = strict
+    ? validateProviderEnvVar(raw.providerEnvVar)
+    : safeOrFallback(() => validateProviderEnvVar(raw.providerEnvVar), '');
+
+  const detected = detectAgentType(`${rawAgent} ${model} ${defaults.providerHint || ''} ${id} ${raw.role || ''} ${raw.description || ''}`);
   const meta = AGENT_TYPE_META[detected] || AGENT_TYPE_META.terminal;
   const desc = redactSensitiveText(stripQuotes(raw.description || raw.scope || ''));
   const role = redactSensitiveText(stripQuotes(raw.role || '') || (raw.name ? stripQuotes(raw.name) : '') || meta.role);
@@ -134,12 +376,17 @@ function normalisePresetRecord(raw, defaults = {}) {
     id,
     name: redactSensitiveText(stripQuotes(raw.name || id.slice(1))),
     role,
-    model: model || meta.model,
+    agent: rawAgent || (SAFE_CLI_AGENTS.has(detected) ? detected : ''),
+    model: redactSensitiveText(model) || meta.model,
     avatarBg: /^#[0-9a-fA-F]{6}$/.test(raw.avatarBg || raw.color || '') ? (raw.avatarBg || raw.color) : meta.avatarBg,
     icon: stripQuotes(raw.icon || '') || meta.icon,
     scope: desc || meta.scope,
     tags,
     brief: redactSensitiveText(stripQuotes(raw.brief || raw.initialBrief || '') || (desc ? `${desc}` : '')),
+    effort,
+    extraArgs,
+    providerBaseUrl,
+    providerEnvVar,
     source: raw.source || defaults.source || 'Saved Preset',
     category: raw.category || defaults.category || 'saved'
   };
@@ -186,12 +433,13 @@ function parseMarkdownAgentProfile(filePath, rawContent, sourceLabel, providerHi
       role: fields.role || (fields.mode ? `${name} (${fields.mode})` : name),
       description,
       model: fields.model,
+      effort: fields.effort,
       color: fields.color,
       icon: fields.icon,
       tags,
       brief: description
     },
-    { category: 'cli', source: sourceLabel, providerHint }
+    { category: 'cli', source: sourceLabel, providerHint, strict: false }
   );
 }
 
@@ -218,26 +466,60 @@ function scanPresetDirectory(dirPath, sourceLabel, providerHint) {
   return results;
 }
 
-function loadSavedPresets() {
-  if (!fs.existsSync(PRESETS_FILE)) return [];
+export function readPresetsStore(filePath = PRESETS_FILE) {
+  if (!fs.existsSync(filePath)) {
+    return { presets: [], lastLaunchedPresetId: null };
+  }
   try {
-    const raw = JSON.parse(fs.readFileSync(PRESETS_FILE, 'utf8'));
+    const raw = JSON.parse(fs.readFileSync(filePath, 'utf8'));
     const list = Array.isArray(raw) ? raw : (Array.isArray(raw?.presets) ? raw.presets : []);
-    return list
+    const presets = list
       .filter(item => item && (item.id || item.handle || item.name))
-      .map(item => normalisePresetRecord(item, { category: 'saved', source: 'Saved (~/.orca-swarm/presets.json)' }));
+      .map(item => normalisePresetRecord(item, { category: 'saved', source: 'Saved (~/.orca-swarm/presets.json)', strict: false }));
+    const lastLaunchedPresetId = !Array.isArray(raw) && typeof raw?.lastLaunchedPresetId === 'string' && raw.lastLaunchedPresetId.trim()
+      ? raw.lastLaunchedPresetId.trim()
+      : null;
+    return { presets, lastLaunchedPresetId };
   } catch {
-    return [];
+    return { presets: [], lastLaunchedPresetId: null };
   }
 }
 
-function saveUserPreset(rawPreset) {
-  const preset = normalisePresetRecord(rawPreset, { category: 'saved', source: 'Saved (~/.orca-swarm/presets.json)' });
-  const existing = loadSavedPresets().filter(p => p.id !== preset.id);
-  const next = [preset, ...existing];
+function writePresetsStore(store, filePath = PRESETS_FILE) {
   ensureSwarmStorage({ writeToken: false });
-  fs.writeFileSync(PRESETS_FILE, JSON.stringify({ presets: next }, null, 2) + '\n', { encoding: 'utf8', mode: 0o600 });
-  try { fs.chmodSync(PRESETS_FILE, 0o600); } catch {}
+  const payload = {
+    presets: Array.isArray(store?.presets) ? store.presets : [],
+    lastLaunchedPresetId: typeof store?.lastLaunchedPresetId === 'string' && store.lastLaunchedPresetId.trim()
+      ? store.lastLaunchedPresetId.trim()
+      : null
+  };
+  fs.writeFileSync(filePath, JSON.stringify(payload, null, 2) + '\n', { encoding: 'utf8', mode: 0o600 });
+  try { fs.chmodSync(filePath, 0o600); } catch {}
+  return payload;
+}
+
+function loadSavedPresets(filePath = PRESETS_FILE) {
+  return readPresetsStore(filePath).presets;
+}
+
+export function getLastLaunchedPresetId(filePath = PRESETS_FILE) {
+  return readPresetsStore(filePath).lastLaunchedPresetId;
+}
+
+export function setLastLaunchedPresetId(presetId, filePath = PRESETS_FILE) {
+  const cleanId = typeof presetId === 'string' ? presetId.trim() : '';
+  const store = readPresetsStore(filePath);
+  store.lastLaunchedPresetId = cleanId || null;
+  writePresetsStore(store, filePath);
+  return store.lastLaunchedPresetId;
+}
+
+export function saveUserPreset(rawPreset, filePath = PRESETS_FILE) {
+  const preset = normalisePresetRecord(rawPreset, { category: 'saved', source: 'Saved (~/.orca-swarm/presets.json)', strict: true });
+  const store = readPresetsStore(filePath);
+  const existing = store.presets.filter(p => p.id !== preset.id);
+  const next = [preset, ...existing];
+  writePresetsStore({ presets: next, lastLaunchedPresetId: store.lastLaunchedPresetId }, filePath);
   return preset;
 }
 
@@ -1788,6 +2070,381 @@ function resolveSafeCliAgent(member = {}) {
   return 'claude';
 }
 
+export function buildStandaloneLaunchSpec({
+  agent,
+  model = '',
+  effort = '',
+  extraArgs = [],
+  prompt = '',
+  providerBaseUrl = '',
+  providerEnvVar = '',
+  cwd = process.cwd()
+} = {}) {
+  const cleanAgent = String(agent || '').trim().toLowerCase();
+  if (!SAFE_CLI_AGENTS.has(cleanAgent)) {
+    throw new PresetValidationError(`Unsupported standalone CLI agent: ${cleanAgent || '(empty)'}`);
+  }
+
+  const cleanEffort = validatePresetEffort(effort);
+  const cleanExtraArgs = tokenizeAndValidateExtraArgs(extraArgs);
+  const cleanBaseUrl = validateProviderBaseUrl(providerBaseUrl);
+  const cleanEnvVar = validateProviderEnvVar(providerEnvVar);
+
+  const cleanModel = typeof model === 'string' ? model.trim() : '';
+  if (cleanModel) {
+    if (CONTROL_CHAR_RE.test(cleanModel) || SHELL_META_RE.test(cleanModel) || !/^[a-z0-9][a-z0-9._:/-]{0,127}$/i.test(cleanModel)) {
+      throw new PresetValidationError('Invalid model identifier');
+    }
+    if (looksLikeLiteralSecret(cleanModel)) {
+      throw new PresetValidationError('Literal API keys or secrets are not permitted in model');
+    }
+  }
+
+  const cleanPrompt = typeof prompt === 'string' ? prompt.trim() : '';
+  if (cleanPrompt && cleanPrompt.includes('\0')) {
+    throw new PresetValidationError('Invalid prompt');
+  }
+
+  const args = [];
+  if (cleanModel) {
+    args.push('--model', cleanModel);
+  }
+  if (cleanEffort) {
+    if (cleanAgent === 'codex') {
+      args.push('-c', `model_reasoning_effort=${cleanEffort}`);
+    } else {
+      args.push('--effort', cleanEffort);
+    }
+  }
+  if (cleanExtraArgs.length > 0) {
+    args.push(...cleanExtraArgs);
+  }
+  if (cleanPrompt) {
+    if (cleanAgent === 'claude' || cleanAgent === 'gemini') {
+      args.push('-p', cleanPrompt);
+    } else if (cleanAgent === 'opencode') {
+      args.push('run', cleanPrompt);
+    } else {
+      args.push(cleanPrompt);
+    }
+  }
+
+  const envPatch = {};
+  if (cleanBaseUrl && ANTHROPIC_COMPATIBLE_AGENTS.has(cleanAgent)) {
+    envPatch.ANTHROPIC_BASE_URL = cleanBaseUrl;
+  }
+
+  return {
+    bin: cleanAgent,
+    args,
+    cwd: cwd || process.cwd(),
+    envPatch,
+    providerEnvVar: cleanEnvVar
+  };
+}
+
+function execFileWithEnvAsync(bin, args = [], options = {}) {
+  return new Promise(resolve => {
+    execFile(
+      bin,
+      args,
+      {
+        cwd: options.cwd,
+        env: options.env,
+        timeout: options.timeout ?? 15000,
+        maxBuffer: options.maxBuffer ?? 5 * 1024 * 1024,
+        shell: false
+      },
+      (error, stdout, stderr) => {
+        resolve({ error, stdout: stdout || '', stderr: stderr || '' });
+      }
+    );
+  });
+}
+
+function findPresetByRef(presetRef, cwd = process.cwd()) {
+  const ref = typeof presetRef === 'string' ? presetRef.trim() : '';
+  if (!ref) return null;
+  const all = discoverAgentPresets(cwd);
+  const norm = normalizeHandle(ref);
+  return all.find(p => p.key === ref || p.id === ref || p.id === norm) || null;
+}
+
+async function launchPresetRequest(body, { presetsFile = PRESETS_FILE } = {}) {
+  const data = body && typeof body === 'object' && !Array.isArray(body) ? body : {};
+  const presetRef = typeof data.presetId === 'string'
+    ? data.presetId.trim()
+    : (typeof data.key === 'string' ? data.key.trim() : (typeof data.presetKey === 'string' ? data.presetKey.trim() : ''));
+
+  let basePreset = null;
+  if (presetRef) {
+    basePreset = findPresetByRef(presetRef);
+    if (!basePreset && (!data.preset || typeof data.preset !== 'object')) {
+      return { ok: false, status: 404, code: 'preset_not_found', error: `Preset not found: ${presetRef}` };
+    }
+  }
+
+  let validatedInline = null;
+  if (data.preset && typeof data.preset === 'object' && !Array.isArray(data.preset)) {
+    validatedInline = normalisePresetRecord(data.preset, { strict: true });
+  }
+
+  const mergedSource = {
+    ...(basePreset || {}),
+    ...(validatedInline || {})
+  };
+
+  if (data.agent !== undefined) mergedSource.agent = data.agent;
+  if (data.model !== undefined) mergedSource.model = data.model;
+  if (data.effort !== undefined) mergedSource.effort = data.effort;
+  if (data.extraArgs !== undefined) mergedSource.extraArgs = data.extraArgs;
+  if (data.providerBaseUrl !== undefined) mergedSource.providerBaseUrl = data.providerBaseUrl;
+  if (data.providerEnvVar !== undefined) mergedSource.providerEnvVar = data.providerEnvVar;
+
+  if (!basePreset && !validatedInline && !data.agent && !data.model) {
+    return { ok: false, status: 400, code: 'invalid_preset', error: 'presetId or preset configuration is required' };
+  }
+
+  const rawAgent = typeof mergedSource.agent === 'string' ? mergedSource.agent.trim().toLowerCase() : '';
+  if (rawAgent && !/^[a-z0-9][a-z0-9._-]{0,63}$/i.test(rawAgent)) {
+    throw new PresetValidationError('Invalid agent identifier');
+  }
+
+  const rawModel = typeof mergedSource.model === 'string' ? mergedSource.model.trim() : '';
+  if (rawModel && (CONTROL_CHAR_RE.test(rawModel) || SHELL_META_RE.test(rawModel) || looksLikeLiteralSecret(rawModel))) {
+    throw new PresetValidationError('Invalid or unsafe model identifier');
+  }
+
+  const effort = validatePresetEffort(mergedSource.effort);
+  const extraArgs = tokenizeAndValidateExtraArgs(mergedSource.extraArgs);
+  const providerBaseUrl = validateProviderBaseUrl(mergedSource.providerBaseUrl);
+  const providerEnvVar = validateProviderEnvVar(mergedSource.providerEnvVar);
+
+  const prompt = typeof data.prompt === 'string' ? data.prompt : (typeof mergedSource.brief === 'string' ? mergedSource.brief : '');
+  if (prompt && prompt.includes('\0')) {
+    throw new PresetValidationError('Invalid prompt');
+  }
+
+  await ensureOrcaPolled();
+
+  const knownBranches = collectKnownBranchNames();
+  const cleanAgent = resolveSafeCliAgent({
+    agent: rawAgent,
+    model: rawModel,
+    role: mergedSource.role,
+    id: mergedSource.id
+  });
+  const cleanModel = isRealModelId(rawModel, knownBranches) ? rawModel : '';
+
+  let resolvedWt = null;
+  if (typeof data.worktreePath === 'string' && data.worktreePath.trim()) {
+    const rawWt = data.worktreePath.trim();
+    if (rawWt.includes('\0') || rawWt.startsWith('-')) {
+      return { ok: false, status: 400, code: 'invalid_params', error: 'Invalid worktreePath' };
+    }
+    const candidateWt = path.resolve(rawWt);
+    if (orcaStatus.available && !getKnownWorktreePaths().has(candidateWt)) {
+      return { ok: false, status: 400, code: 'invalid_params', error: 'Unknown or invalid worktreePath' };
+    }
+    if (!fs.existsSync(candidateWt)) {
+      return { ok: false, status: 400, code: 'invalid_params', error: 'worktreePath does not exist' };
+    }
+    resolvedWt = candidateWt;
+  } else if (activeWorktreePath && fs.existsSync(activeWorktreePath)) {
+    resolvedWt = activeWorktreePath;
+  }
+
+  const workspaceId = (typeof data.workspaceId === 'string' && data.workspaceId.trim())
+    ? data.workspaceId.trim()
+    : (activeOrcaWorkspaceId || activeOrcaWorktreeId || null);
+
+  if (workspaceId && (workspaceId.includes('\0') || workspaceId.startsWith('-') || workspaceId.length > 512)) {
+    return { ok: false, status: 400, code: 'invalid_params', error: 'Invalid workspaceId' };
+  }
+
+  const launchedPresetId = basePreset?.key || validatedInline?.key || presetRef || basePreset?.id || validatedInline?.id || null;
+  const focus = Boolean(data.focus);
+
+  // Try Orca Worker IPC queue first (15s TTL) when running inside Orca
+  const ipcCfg = readWorkerIpcConfig();
+  if (ipcCfg) {
+    const ipcRes = await callWorkerIpc('/ipc/launch/pending', {
+      presetId: launchedPresetId || '',
+      agent: cleanAgent,
+      workspaceId: workspaceId || '',
+      model: cleanModel,
+      effort,
+      extraArgs,
+      providerBaseUrl,
+      providerEnvVar,
+      ttlMs: 15000
+    }, 3000);
+
+    if (ipcRes.ok) {
+      const orcaArgs = [
+        'agent', 'launch',
+        '--agent', cleanAgent,
+        ...(resolvedWt ? ['--worktree', 'path:' + resolvedWt] : []),
+        ...(prompt.trim() ? ['--prompt', prompt.trim()] : []),
+        ...(cleanModel ? ['--model', cleanModel] : []),
+        ...(cleanModel && effort ? ['--effort', effort] : []),
+        ...(focus ? ['--focus'] : []),
+        '--json'
+      ];
+      const rpcRes = await execJson(orcaBin, orcaArgs, { timeout: 15000 });
+      if (!rpcRes || rpcRes.ok === false) {
+        return {
+          ok: false,
+          status: 502,
+          code: 'launch_failed',
+          error: redactSensitiveText(rpcRes?.error?.message || 'Agent launch failed')
+        };
+      }
+
+      const persistedLastId = launchedPresetId ? setLastLaunchedPresetId(launchedPresetId, presetsFile) : getLastLaunchedPresetId(presetsFile);
+      appendToEventLog({
+        type: 'preset.launch',
+        mode: 'orca',
+        presetId: launchedPresetId,
+        agent: cleanAgent,
+        model: cleanModel || null,
+        effort,
+        hasProviderBaseUrl: Boolean(providerBaseUrl),
+        providerEnvVar: providerEnvVar || null,
+        timestamp: Date.now()
+      });
+
+      return {
+        ok: true,
+        status: 200,
+        mode: 'orca',
+        presetId: launchedPresetId,
+        lastLaunchedPresetId: persistedLastId,
+        agent: cleanAgent,
+        model: cleanModel || null,
+        effort,
+        extraArgs,
+        providerBaseUrl,
+        providerEnvVar,
+        result: unwrapOrcaResult(rpcRes)
+      };
+    }
+  }
+
+  // Standalone mode (Worker IPC unavailable): use Orca CLI if no hook-only overrides needed, otherwise validated execFile
+  if (orcaStatus.available && !providerBaseUrl && !providerEnvVar && extraArgs.length === 0) {
+    const orcaArgs = [
+      'agent', 'launch',
+      '--agent', cleanAgent,
+      ...(resolvedWt ? ['--worktree', 'path:' + resolvedWt] : []),
+      ...(prompt.trim() ? ['--prompt', prompt.trim()] : []),
+      ...(cleanModel ? ['--model', cleanModel] : []),
+      ...(cleanModel && effort ? ['--effort', effort] : []),
+      ...(focus ? ['--focus'] : []),
+      '--json'
+    ];
+    const rpcRes = await execJson(orcaBin, orcaArgs, { timeout: 15000 });
+    if (!rpcRes || rpcRes.ok === false) {
+      return {
+        ok: false,
+        status: 502,
+        code: 'launch_failed',
+        error: redactSensitiveText(rpcRes?.error?.message || 'Standalone Orca agent launch failed')
+      };
+    }
+    const persistedLastId = launchedPresetId ? setLastLaunchedPresetId(launchedPresetId, presetsFile) : getLastLaunchedPresetId(presetsFile);
+    appendToEventLog({
+      type: 'preset.launch',
+      mode: 'orca_cli',
+      presetId: launchedPresetId,
+      agent: cleanAgent,
+      model: cleanModel || null,
+      effort,
+      timestamp: Date.now()
+    });
+    return {
+      ok: true,
+      status: 200,
+      mode: 'orca_cli',
+      presetId: launchedPresetId,
+      lastLaunchedPresetId: persistedLastId,
+      agent: cleanAgent,
+      model: cleanModel || null,
+      effort,
+      extraArgs,
+      providerBaseUrl,
+      providerEnvVar,
+      result: unwrapOrcaResult(rpcRes)
+    };
+  }
+
+  // Direct standalone execFile launch with zero shell interpolation
+  const spec = buildStandaloneLaunchSpec({
+    agent: cleanAgent,
+    model: cleanModel,
+    effort,
+    extraArgs,
+    prompt: prompt.trim(),
+    providerBaseUrl,
+    providerEnvVar,
+    cwd: resolvedWt || process.cwd()
+  });
+
+  const execRes = await execFileWithEnvAsync(spec.bin, spec.args, {
+    cwd: spec.cwd,
+    env: {
+      ...process.env,
+      ...spec.envPatch
+    },
+    timeout: 15000
+  });
+
+  if (execRes.error) {
+    const msg = execRes.error.code === 'ENOENT'
+      ? `Standalone CLI binary "${spec.bin}" was not found on PATH`
+      : redactSensitiveText(execRes.stderr || execRes.error.message || 'Standalone launch failed');
+    return {
+      ok: false,
+      status: 502,
+      code: 'standalone_launch_failed',
+      error: msg
+    };
+  }
+
+  const persistedLastId = launchedPresetId ? setLastLaunchedPresetId(launchedPresetId, presetsFile) : getLastLaunchedPresetId(presetsFile);
+  appendToEventLog({
+    type: 'preset.launch',
+    mode: 'standalone',
+    presetId: launchedPresetId,
+    agent: cleanAgent,
+    model: cleanModel || null,
+    effort,
+    hasProviderBaseUrl: Boolean(providerBaseUrl),
+    providerEnvVar: providerEnvVar || null,
+    timestamp: Date.now()
+  });
+
+  return {
+    ok: true,
+    status: 200,
+    mode: 'standalone',
+    presetId: launchedPresetId,
+    lastLaunchedPresetId: persistedLastId,
+    agent: cleanAgent,
+    model: cleanModel || null,
+    effort,
+    extraArgs,
+    providerBaseUrl,
+    providerEnvVar,
+    result: {
+      bin: spec.bin,
+      args: spec.args,
+      cwd: spec.cwd,
+      stdout: redactSensitiveText(truncateText(execRes.stdout, 1000))
+    }
+  };
+}
+
 function parseComposeMentions(text, explicitMentions) {
   const found = [];
   const seen = new Set();
@@ -2918,7 +3575,8 @@ async function handleRequest(req, res) {
   // GET /api/presets
   if (req.method === 'GET' && pathname === '/api/presets') {
     const presets = discoverAgentPresets();
-    sendJson(res, 200, { ok: true, presets, count: presets.length });
+    const lastLaunchedPresetId = getLastLaunchedPresetId();
+    sendJson(res, 200, { ok: true, presets, count: presets.length, lastLaunchedPresetId });
     return;
   }
 
@@ -2954,12 +3612,76 @@ async function handleRequest(req, res) {
     const parsed = bodyRes.data;
     const payload = parsed && typeof parsed.preset === 'object' && parsed.preset !== null ? parsed.preset : parsed;
     if (!payload || !(payload.id || payload.handle || payload.name)) {
-      sendJson(res, 400, { ok: false, error: 'Preset id or handle is required' });
+      sendJson(res, 400, { ok: false, code: 'invalid_preset', error: 'Preset id or handle is required' });
       return;
     }
-    const saved = saveUserPreset(payload);
-    const presets = discoverAgentPresets();
-    sendJson(res, 200, { ok: true, preset: saved, presets });
+    try {
+      const saved = saveUserPreset(payload);
+      const presets = discoverAgentPresets();
+      sendJson(res, 200, {
+        ok: true,
+        preset: saved,
+        presets,
+        lastLaunchedPresetId: getLastLaunchedPresetId()
+      });
+    } catch (err) {
+      const status = err instanceof PresetValidationError ? err.statusCode : 400;
+      sendJson(res, status, {
+        ok: false,
+        code: err instanceof PresetValidationError ? err.code : 'invalid_preset',
+        error: redactSensitiveText(err?.message || 'Invalid preset configuration')
+      });
+    }
+    return;
+  }
+
+  // POST /api/presets/launch
+  if (req.method === 'POST' && pathname === '/api/presets/launch') {
+    const bodyRes = await readJsonBody(req, res);
+    if (!bodyRes.ok) return;
+    try {
+      const outcome = await launchPresetRequest(bodyRes.data);
+      const { status, ...payload } = outcome;
+      sendJson(res, status || (outcome.ok ? 200 : 400), payload);
+    } catch (err) {
+      const status = err instanceof PresetValidationError ? err.statusCode : 400;
+      sendJson(res, status, {
+        ok: false,
+        code: err instanceof PresetValidationError ? err.code : 'invalid_preset',
+        error: redactSensitiveText(err?.message || 'Invalid preset launch request')
+      });
+    }
+    return;
+  }
+
+  // POST /api/presets/relaunch-last
+  if (req.method === 'POST' && pathname === '/api/presets/relaunch-last') {
+    const bodyRes = await readJsonBody(req, res);
+    if (!bodyRes.ok) return;
+    const lastId = getLastLaunchedPresetId();
+    if (!lastId) {
+      sendJson(res, 404, {
+        ok: false,
+        code: 'no_last_preset',
+        error: 'No previously launched preset recorded'
+      });
+      return;
+    }
+    try {
+      const outcome = await launchPresetRequest({
+        ...bodyRes.data,
+        presetId: lastId
+      });
+      const { status, ...payload } = outcome;
+      sendJson(res, status || (outcome.ok ? 200 : 400), payload);
+    } catch (err) {
+      const status = err instanceof PresetValidationError ? err.statusCode : 400;
+      sendJson(res, status, {
+        ok: false,
+        code: err instanceof PresetValidationError ? err.code : 'invalid_preset',
+        error: redactSensitiveText(err?.message || 'Invalid relaunch request')
+      });
+    }
     return;
   }
 
@@ -3558,7 +4280,9 @@ async function handleRequest(req, res) {
       pollIntervalMs: getPollIntervalMs(),
       pollMode: activeClients.size > 0 ? 'active' : 'idle',
       workerIpcAvailable: Boolean(readWorkerIpcConfig()),
-      hostApiTarget: '1.7-1.9'
+      hostApiTarget: '1.7-1.9',
+      zeroTelemetry: true,
+      lastLaunchedPresetId: getLastLaunchedPresetId()
     });
     return;
   }
